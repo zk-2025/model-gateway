@@ -1,0 +1,11 @@
+[
+  {
+    "name": "NVIDIA",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "api_key": "nvapi-REPLACE_WITH_YOUR_KEY",
+    "models": [
+      "deepseek-ai/deepseek-v4-flash"
+    ],
+    "free_only": true
+  }
+]

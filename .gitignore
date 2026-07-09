@@ -1,0 +1,33 @@
+# 敏感数据（含 API key / 密钥 / 个人配置）
+providers.json
+config.json
+history.jsonl
+usage.jsonl
+announcement_cache.json
+announcement.json
+routers.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+*.tmp
+
+# 打包产物
+dist/
+build/
+*.exe
+
+# 旧数据/状态文件
+status*.json
+stability.json
+gemini*.json
+test_sensenova*.json
+
+# IDE/缓存
+.codebuddy/
+.pytest_cache/
+
+# 日志
+*.log

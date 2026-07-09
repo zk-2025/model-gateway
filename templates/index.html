@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型监控 | Model Dashboard</title>
+<style>
+:root {
+  --mac-bg: #F5F5F7;
+  --mac-window-bg: rgba(255, 255, 255, 0.65);
+  --mac-border: rgba(0, 0, 0, 0.1);
+  --mac-border-highlight: rgba(255, 255, 255, 0.6);
+  --text-primary: #1D1D1F;
+  --text-secondary: rgba(0, 0, 0, 0.55);
+  --accent-primary: #007AFF;
+  --accent-primary-hover: #0056b3;
+  --success: #28CD41;
+  --success-bg: rgba(40, 205, 65, 0.1);
+  --warning: #FFCC00;
+  --warning-bg: rgba(255, 204, 0, 0.15);
+  --danger: #FF3B30;
+  --danger-bg: rgba(255, 59, 48, 0.1);
+  --unknown: #8E8E93;
+  --glass-blur: blur(40px) saturate(200%);
+}
+
+[data-theme="dark"] {
+  --mac-bg: #1c1c1e;
+  --mac-window-bg: rgba(30, 30, 30, 0.55);
+  --mac-border: rgba(255, 255, 255, 0.12);
+  --mac-border-highlight: rgba(255, 255, 255, 0.2);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(235, 235, 245, 0.6);
+  --accent-primary: #0A84FF;
+  --accent-primary-hover: #007AFF;
+  --success: #32D74B;
+  --success-bg: rgba(50, 215, 75, 0.15);
+  --warning: #FFD60A;
+  --warning-bg: rgba(255, 214, 10, 0.15);
+  --danger: #FF453A;
+  --danger-bg: rgba(255, 69, 58, 0.15);
+  --unknown: #98989D;
+  --glass-blur: blur(30px) saturate(180%);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--mac-bg);
+  background-image: 
+    radial-gradient(ellipse at 10% 20%, rgba(94, 92, 230, 0.08) 0%, transparent 40%),
+    radial-gradient(ellipse at 90% 80%, rgba(10, 132, 255, 0.08) 0%, transparent 40%),
+    radial-gradient(ellipse at 50% 10%, rgba(191, 90, 242, 0.05) 0%, transparent 50%);
+  background-attachment: fixed;
+  color: var(--text-primary);
+  min-height: 100vh;
+  padding: 40px 20px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+[data-theme="dark"] body {
+  background-image: 
+    radial-gradient(ellipse at 10% 20%, rgba(94, 92, 230, 0.3) 0%, transparent 40%),
+    radial-gradient(ellipse at 90% 80%, rgba(10, 132, 255, 0.25) 0%, transparent 40%),
+    radial-gradient(ellipse at 50% 10%, rgba(191, 90, 242, 0.15) 0%, transparent 50%);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(150, 150, 150, 0.3); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(150, 150, 150, 0.5); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
+
+.mac-window {
+  width: 100%;
+  max-width: 1400px;
+  background: var(--mac-window-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: 12px;
+  border: 1px solid var(--mac-border);
+  box-shadow: 
+    0 0 0 1px var(--mac-border-highlight) inset,
+    0 25px 50px -12px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  animation: scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+[data-theme="dark"] .mac-window {
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+}
+
+.mac-titlebar {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+  background: rgba(255, 255, 255, 0.4);
+  position: relative;
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+[data-theme="dark"] .mac-titlebar {
+  border-bottom: 1px solid rgba(0,0,0,0.3);
+  background: rgba(40, 40, 40, 0.4);
+}
+
+.mac-controls {
+  display: flex;
+  gap: 8px;
+  position: absolute;
+  left: 20px;
+}
+
+.mac-btn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.2);
+}
+
+.mac-btn.close { background: #FF5F56; }
+.mac-btn.minimize { background: #FFBD2E; }
+.mac-btn.zoom { background: #27C93F; }
+
+.mac-title {
+  width: 100%;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(0,0,0,0.8);
+  letter-spacing: 0.3px;
+  transition: color 0.3s ease;
+}
+
+[data-theme="dark"] .mac-title { color: rgba(255,255,255,0.8); }
+
+.mac-content {
+  padding: 30px;
+}
+
+.header-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.header-actions h1 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.btn {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: var(--text-primary);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.btn:hover { background: #ffffff; border-color: rgba(0,0,0,0.15); }
+.btn:active { transform: scale(0.98); background: rgba(0, 0, 0, 0.03); }
+
+[data-theme="dark"] .btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+[data-theme="dark"] .btn:hover { background: rgba(255, 255, 255, 0.15); border-color: rgba(255,255,255,0.2); }
+[data-theme="dark"] .btn:active { background: rgba(255, 255, 255, 0.08); }
+
+.btn-primary {
+  background: var(--accent-primary);
+  border-color: rgba(0,0,0,0.05);
+  color: white;
+}
+.btn-primary:hover { background: var(--accent-primary-hover); }
+[data-theme="dark"] .btn-primary { border-color: rgba(0,0,0,0.1); }
+
+.poll-bar {
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--mac-border);
+  border-radius: 10px;
+  padding: 12px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: background 0.3s ease;
+}
+
+[data-theme="dark"] .poll-bar { background: rgba(0, 0, 0, 0.2); }
+
+.poll-bar .live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+@keyframes pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.4); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.providers-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.provider-card {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--mac-border);
+  border-radius: 10px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+[data-theme="dark"] .provider-card { background: rgba(255, 255, 255, 0.04); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+
+.provider-card .p-name { 
+  font-weight: 600; font-size: 14px; margin-bottom: 12px; 
+  color: var(--text-primary); display: flex; align-items: center; gap: 8px;
+}
+
+.provider-card .p-name::before {
+  content: ''; display: inline-block; width: 10px; height: 10px;
+  background: linear-gradient(135deg, #A8B1FF, #6B72FF);
+  border-radius: 3px;
+}
+
+.copy-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; font-size: 12px;
+  background: rgba(0,0,0,0.03); padding: 8px 12px;
+  border-radius: 6px; border: 1px solid rgba(0,0,0,0.05);
+  transition: background 0.3s ease;
+}
+[data-theme="dark"] .copy-row { background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); }
+
+.copy-row span { color: var(--text-secondary); margin-right: 8px; }
+.copy-row code { color: #0056b3; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; flex: 1; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+[data-theme="dark"] .copy-row code { color: #A8B1FF; }
+
+.btn-copy {
+  background: rgba(255,255,255,0.8); border: 1px solid rgba(0,0,0,0.1);
+  color: var(--text-primary); padding: 4px 10px; border-radius: 5px;
+  font-size: 11px; font-weight: 500; cursor: pointer; transition: 0.2s;
+}
+.btn-copy:hover { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+
+[data-theme="dark"] .btn-copy { background: rgba(255,255,255,0.1); border: 0.5px solid rgba(255,255,255,0.1); }
+[data-theme="dark"] .btn-copy:hover { background: rgba(255,255,255,0.15); box-shadow: none;}
+
+.filter-bar {
+  display: flex; gap: 12px; margin-bottom: 16px;
+}
+
+.filter-bar input, .filter-bar select {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+  transition: 0.2s;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+}
+
+.filter-bar input:focus, .filter-bar select:focus {
+  border-color: var(--accent-primary);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+}
+
+[data-theme="dark"] .filter-bar input, [data-theme="dark"] .filter-bar select {
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--mac-border); box-shadow: none;
+}
+[data-theme="dark"] .filter-bar input:focus, [data-theme="dark"] .filter-bar select:focus {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.table-container {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--mac-border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+  transition: background 0.3s ease;
+}
+
+[data-theme="dark"] .table-container { background: rgba(0, 0, 0, 0.2); box-shadow: none; }
+
+table { width: 100%; border-collapse: collapse; }
+
+th {
+  background: rgba(0, 0, 0, 0.02);
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+}
+[data-theme="dark"] th { background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid rgba(0,0,0,0.5); font-weight: 500;}
+
+td {
+  padding: 12px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  vertical-align: middle;
+}
+[data-theme="dark"] td { border-bottom: 1px solid rgba(255, 255, 255, 0.03); }
+
+tbody tr { transition: background 0.1s; }
+tbody tr:hover { background: rgba(0, 0, 0, 0.03); }
+[data-theme="dark"] tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+tbody tr:last-child td { border-bottom: none; }
+
+.model-name { font-weight: 600; color: var(--text-primary); font-size: 14px;}
+.model-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.model-provider-badge {
+  font-size: 10px; font-weight: 600; color: #fff;
+  background: var(--accent-primary); border: none;
+  padding: 2px 6px; border-radius: 4px; margin-right: 6px;
+}
+[data-theme="dark"] .model-provider-badge {
+  color: rgba(255,255,255,0.9); background: rgba(255,255,255,0.15); border: 0.5px solid rgba(255,255,255,0.1);
+}
+
+.avail-wrap { display: flex; align-items: center; gap: 10px; }
+.avail-bar {
+  flex: 1; max-width: 80px; height: 5px; border-radius: 3px;
+  background: rgba(0, 0, 0, 0.08); overflow: hidden;
+}
+[data-theme="dark"] .avail-bar { background: rgba(255, 255, 255, 0.1); }
+.avail-bar-fill { height: 100%; border-radius: 3px; transition: width 1s ease; }
+.avail-text { font-variant-numeric: tabular-nums; font-weight: 500; font-size: 12px; width: 40px;}
+
+.latency { font-variant-numeric: tabular-nums; }
+.latency.fast { color: var(--success); }
+.latency.medium { color: var(--warning); }
+.latency.slow { color: var(--danger); }
+
+@keyframes scaleIn {
+  0% { opacity: 0; transform: scale(0.98) translateY(10px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
+.empty { text-align: center; padding: 40px; color: var(--text-secondary); font-size: 13px; }
+
+.switch { position: relative; display: inline-block; width: 34px; height: 20px; vertical-align: middle; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
+.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+input:checked + .slider { background-color: var(--success); }
+input:checked + .slider:before { transform: translateX(14px); }
+[data-theme="dark"] .slider { background-color: rgba(255,255,255,0.2); }
+
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  display: none; justify-content: center; align-items: center;
+  z-index: 1000; opacity: 0; transition: opacity 0.3s ease;
+}
+.modal-overlay.show { display: flex; opacity: 1; }
+.modal-content {
+  background: var(--mac-window-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  width: 90%; max-width: 600px; max-height: 85vh; border-radius: 12px;
+  border: 1px solid var(--mac-border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2);
+  display: flex; flex-direction: column; overflow: hidden;
+  transform: scale(0.95); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.modal-overlay.show .modal-content { transform: scale(1); }
+.modal-header {
+  padding: 16px 24px; border-bottom: 1px solid rgba(0,0,0,0.1);
+  display: flex; justify-content: space-between; align-items: center;
+  background: rgba(255,255,255,0.3);
+}
+[data-theme="dark"] .modal-header { background: rgba(40,40,40,0.3); border-bottom: 1px solid rgba(255,255,255,0.1); }
+.modal-title { font-size: 16px; font-weight: 600; }
+.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.modal-footer {
+  padding: 16px 24px; border-top: 1px solid rgba(0,0,0,0.1);
+  display: flex; justify-content: space-between; align-items: center;
+  background: rgba(255,255,255,0.3);
+}
+[data-theme="dark"] .modal-footer { background: rgba(40,40,40,0.3); border-top: 1px solid rgba(255,255,255,0.1); }
+.model-checkbox-item {
+  display: flex; align-items: center; padding: 10px 12px; margin-bottom: 8px;
+  border: 1px solid var(--mac-border); border-radius: 8px;
+  background: rgba(255,255,255,0.5); cursor: pointer; transition: 0.2s;
+}
+[data-theme="dark"] .model-checkbox-item { background: rgba(0,0,0,0.2); }
+.model-checkbox-item:hover { background: rgba(0,122,255,0.05); border-color: var(--accent-primary); }
+[data-theme="dark"] .model-checkbox-item:hover { background: rgba(10,132,255,0.1); }
+.model-checkbox-item input[type="checkbox"] { margin-right: 12px; width: 16px; height: 16px; cursor: pointer; }
+.model-checkbox-label { flex: 1; font-size: 14px; font-weight: 500; word-break: break-all;}
+
+/* 提供商编辑表单 */
+.form-field { margin-bottom: 14px; }
+.form-field > label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+.form-field input[type="text"], .form-field input[type="password"] {
+  width: 100%; padding: 9px 12px; border-radius: 8px;
+  border: 1px solid var(--mac-border); background: rgba(255,255,255,0.6);
+  color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: 0.2s;
+  box-sizing: border-box;
+}
+.form-field input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0,122,255,0.15); background: #fff; }
+[data-theme="dark"] .form-field input { background: rgba(255,255,255,0.08); }
+[data-theme="dark"] .form-field input:focus { background: rgba(255,255,255,0.12); }
+.form-field input:disabled { opacity: 0.55; cursor: not-allowed; }
+.form-hint { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+.form-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; margin-bottom: 14px; }
+.form-check input { width: 16px; height: 16px; cursor: pointer; }
+
+/* 管理门禁 */
+.gate-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: none; justify-content: center; align-items: center; z-index: 2000;
+}
+.gate-overlay.show { display: flex; }
+.gate-box {
+  background: var(--mac-window-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  padding: 32px; border-radius: 14px; border: 1px solid var(--mac-border);
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,0.3); width: 90%; max-width: 380px;
+}
+.gate-box h2 { font-size: 18px; margin-bottom: 8px; }
+.gate-box p { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.6; }
+.gate-box input {
+  width: 100%; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--mac-border); background: rgba(255,255,255,0.6);
+  color: var(--text-primary); font-size: 14px; outline: none; margin-bottom: 12px;
+  font-family: ui-monospace, monospace;
+}
+.gate-box input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0,122,255,0.15); }
+[data-theme="dark"] .gate-box input { background: rgba(255,255,255,0.08); }
+.gate-box .btn { width: 100%; justify-content: center; }
+.gate-error { color: var(--danger); font-size: 12px; margin-top: 8px; display: none; }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: var(--mac-window-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--mac-border); border-radius: 10px; padding: 12px 22px;
+  font-size: 14px; font-weight: 500; color: var(--text-primary);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 3000;
+  opacity: 0; pointer-events: none; transition: opacity 0.3s, transform 0.3s;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.ok { border-left: 4px solid var(--success); }
+.toast.warn { border-left: 4px solid var(--warning); }
+.toast.error { border-left: 4px solid var(--danger); }
+
+/* 公告渲染 */
+#announcementBody h1, #announcementBody h2, #announcementBody h3 { margin: 16px 0 8px; font-weight: 600; }
+#announcementBody h1 { font-size: 18px; }
+#announcementBody h2 { font-size: 16px; }
+#announcementBody h3 { font-size: 15px; }
+#announcementBody p { margin: 8px 0; }
+#announcementBody ul, #announcementBody ol { margin: 8px 0; padding-left: 24px; }
+#announcementBody li { margin: 4px 0; }
+#announcementBody a { color: var(--accent-primary); text-decoration: none; }
+#announcementBody a:hover { text-decoration: underline; }
+#announcementBody code { background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
+[data-theme="dark"] #announcementBody code { background: rgba(255,255,255,0.1); }
+#announcementBody blockquote { border-left: 3px solid var(--accent-primary); padding-left: 12px; margin: 8px 0; color: var(--text-secondary); }
+#announcementBody img { max-width: 100%; border-radius: 8px; }
+#announcementBody hr { border: 0; border-top: 1px solid var(--mac-border); margin: 16px 0; }
+
+</style>
+</head>
+<body>
+<script>
+  if (localStorage.getItem('theme') === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+</script>
+
+<!-- 管理门禁 -->
+<!-- Removed Gate Overlay -->
+
+<!-- 首次免责声明 -->
+<div class="gate-overlay" id="disclaimerGate">
+  <div class="gate-box" style="max-width:480px;">
+    <h2>📝 使用声明</h2>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;margin-bottom:18px;text-align:left;">
+      <p style="margin-bottom:10px;">⚠️ 使用本程序前请先查看「💡 使用说明」。</p>
+      <p style="margin-bottom:10px;">本程序为<b style="color:var(--text-primary);">公益项目，不为盈利</b>，仅供学习交流与测试使用。</p>
+      <p style="margin-bottom:10px;">请于下载后 <b style="color:var(--danger);">24 小时内删除</b>，严禁用于任何商业用途。</p>
+      <p>使用者需对自己的一切行为负责，作者不承担任何法律责任。</p>
+    </div>
+    <button class="btn btn-primary" onclick="acceptDisclaimer()" style="width:100%;justify-content:center;">我已阅读并同意</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="mac-window">
+  <div class="mac-titlebar">
+    <div class="mac-controls">
+      <div class="mac-btn close"></div>
+      <div class="mac-btn minimize"></div>
+      <div class="mac-btn zoom"></div>
+    </div>
+    <div class="mac-title">模型监控 | Model Dashboard</div>
+  </div>
+  
+  <div class="mac-content">
+    <div class="header-actions">
+      <div style="display: flex; align-items: center; gap: 24px;">
+        <h1 style="margin: 0;">无限额度监控面板</h1>
+        <div class="main-tabs" style="display: flex; gap: 6px; background: rgba(0,0,0,0.04); padding: 4px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.05);">
+          <button id="tab-monitor" class="btn" onclick="switchMainTab('monitor')" style="border: none; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); background: var(--mac-window-bg); color: var(--text-primary);">实时监控</button>
+          <button id="tab-usage" class="btn" onclick="switchMainTab('usage')" style="border: none; font-weight: 500; box-shadow: none; background: transparent; color: var(--text-secondary);">消耗统计</button>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn" onclick="openRouterManager()">🔀 路由配置</button>
+        <button class="btn" onclick="openFeishuModal()" style="color: var(--danger)">📢 系统公告</button>
+        <button class="btn" onclick="document.getElementById('aboutModal').classList.add('show')" id="aboutBtn">
+          💡 使用说明
+        </button>
+        <button class="btn" onclick="toggleTheme()" id="themeBtn">
+          🌙 深色模式
+        </button>
+        <button class="btn btn-primary" onclick="checkAll()" id="checkAllBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.1-8.54L2.5 9M2.5 9V3h6"/></svg>
+          立即检测
+        </button>
+      </div>
+    </div>
+
+    <div id="monitor-view">
+    <div class="poll-bar">
+      <div class="live">
+        <div class="live-dot"></div> 
+        后台守护进程运行中
+      </div>
+      <div id="pollStatus">状态加载中...</div>
+    </div>
+
+    <div class="provider-card" style="margin-bottom: 24px; border-color: var(--accent-primary); box-shadow: 0 0 10px rgba(0,122,255,0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div class="p-name" style="color: var(--accent-primary); margin-bottom: 0;">🚀 本地接口信息 (Local Gateway)</div>
+        <button class="btn" onclick="openOutputModelsModal()" style="font-size: 12px; padding: 4px 10px;">📦 管理输出模型</button>
+      </div>
+      <div class="copy-row">
+        <span>Base URL:</span>
+        <code id="localBaseUrl">http://127.0.0.1:8000/v1</code>
+        <button class="btn-copy" onclick="copyText(document.getElementById('localBaseUrl').innerText, this)">Copy</button>
+      </div>
+      <div class="copy-row">
+        <span>API Key:</span>
+        <code>{{ local_api_key }}</code>
+        <button class="btn-copy" onclick="copyText('{{ local_api_key }}', this)">Copy</button>
+      </div>
+    </div>
+    
+    <script>
+      document.getElementById('localBaseUrl').innerText = window.location.protocol + "//" + window.location.host + "/v1";
+    </script>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; margin-top: 8px;">
+      <h2 style="font-size: 16px; font-weight: 600;">上游提供商</h2>
+      <button class="btn btn-primary" onclick="openProviderEditor()" id="addProviderBtn">+ 添加提供商</button>
+    </div>
+    <div class="providers-section" id="providersSection"></div>
+
+    <div class="filter-bar">
+      <select id="stabilityHours" onchange="loadStability()">
+        <option value="1">最近 1 小时</option>
+        <option value="6">最近 6 小时</option>
+        <option value="24" selected>最近 24 小时</option>
+        <option value="72">最近 3 天</option>
+        <option value="168">最近 7 天</option>
+      </select>
+      <select id="stableFilter" onchange="renderStability()">
+        <option value="all">全部可用性状态</option>
+        <option value="high">稳定 (≥90%)</option>
+        <option value="mid">存在波动 (50%-90%)</option>
+        <option value="low">服务异常 (<50%)</option>
+      </select>
+      <select id="providerFilter" onchange="renderStability()">
+        <option value="all">全部提供商</option>
+      </select>
+      <input type="text" id="stableSearch" placeholder="搜索模型标识..." oninput="renderStability()">
+    </div>
+    
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>模型名称</th>
+            <th width="200">SLA 可用率</th>
+            <th>上下文窗口</th>
+            <th>探针次数</th>
+            <th>成功 / 失败</th>
+            <th>平均延迟</th>
+            <th>极速 / 最慢</th>
+          </tr>
+        </thead>
+        <tbody id="stableBody"></tbody>
+      </table>
+    </div>
+    </div> <!-- end monitor-view -->
+
+    <div id="usage-view" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; margin-top: 8px;">
+      <h2 style="font-size: 16px; font-weight: 600;">消耗统计</h2>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-primary usage-tab" data-days="1" onclick="switchUsageTab(1)">今日</button>
+        <button class="btn usage-tab" data-days="7" onclick="switchUsageTab(7)">近 7 天</button>
+        <button class="btn usage-tab" data-days="30" onclick="switchUsageTab(30)">近 30 天</button>
+      </div>
+    </div>
+    <div id="usageOverview" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;"></div>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>渠道 · 模型</th>
+            <th width="120">请求数</th>
+            <th width="160">输入 Token</th>
+            <th width="160">输出 Token</th>
+            <th width="160">合计 Token</th>
+          </tr>
+        </thead>
+        <tbody id="usageBody">
+          <tr><td colspan="5" class="empty">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    </div> <!-- end usage-view -->
+  </div>
+</div>
+
+<!-- About Modal -->
+<div class="modal-overlay" id="aboutModal" onclick="if(event.target===this) this.classList.remove('show')">
+  <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-header">
+      <div class="modal-title">💡 使用说明 & 关于</div>
+      <div class="mac-btn close" onclick="document.getElementById('aboutModal').classList.remove('show')" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body" style="font-size: 14px; line-height: 1.6; color: var(--text-primary);">
+      <h3 style="margin-top:0;">📝 使用说明</h3>
+
+      <p><b>📍 本地接口（核心用法）</b></p>
+      <p>将上方"本地接口信息"里的 <code>Base URL</code> 和 <code>API Key</code> 填入任何支持 OpenAI 格式的工具（ChatBox、NextChat、SillyTavern、Dify 等）即可使用。网关自动在多个上游提供商间轮询，单渠道挂了无感切换。</p>
+
+      <p><b>📊 实时监控</b></p>
+      <p>展示所有上游模型健康状态、SLA 可用率、平均/极速/最慢延迟、探针次数。模型名旁的状态点代表<b>上次轮询</b>结果：🟢 绿色=正常 / 🔴 红色=异常（限流或报错）/ ⚪ 灰色=尚未巡检。后台每 5 分钟自动巡检，也可点右上角"立即检测"手动触发。</p>
+
+      <p><b>📏 上下文长度</b></p>
+      <p>直接点击监控表格"上下文窗口"列的数字即可修改，回车保存。≥ 1048576 (1M) 的模型会自动纳入 <code>auto-router-1m</code> 路由候选。</p>
+
+      <p><b>🔀 路由配置</b></p>
+      <p>创建自定义路由组并勾选成员模型，客户端 <code>model</code> 字段填路由组名即命中（如 <code>1m</code>、<code>256k</code>），网关在组内按可用率/延迟择优。内置 <code>auto-router-1m</code> 自动聚合所有 1M 上下文模型。</p>
+
+      <p><b>⚙️ 模型管理</b></p>
+      <p>每个提供商卡片支持：编辑连接信息、勾选启用的模型、删除。添加提供商时自动拉取上游可用模型列表。</p>
+
+      <p><b>📦 管理输出模型</b></p>
+      <p>查看本网关对外暴露的所有模型 ID（格式 <code>提供商名-模型名</code>），可一键复制。</p>
+
+      <p><b>📈 消耗统计</b></p>
+      <p>按今日 / 7 天 / 30 天统计请求数、输入/输出/合计 Token，按"渠道·模型"维度明细展示。</p>
+
+      <p><b>🛡️ 智能容灾</b></p>
+      <p>熔断机制：某模型连续失败 3 次熔断 60 秒，期间自动跳过。请求转发时按质量分（可用率+延迟）排序候选，逐个尝试直到成功。</p>
+      
+      <hr style="border: 0; border-top: 1px solid var(--mac-border); margin: 20px 0;">
+      <h3 style="margin-top:0;">👨‍💻 关于作者</h3>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div><b>🧑 名称：</b> 东野</div>
+        <div><b>💬 微信：</b> ywtc000</div>
+        <div><b>📕 小红书：</b> <a href="https://xhslink.com/m/2w27IQZrDzd" target="_blank" style="color: #0066cc; text-decoration: none;">主页直达 (点击访问)</a></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Output Models Modal -->
+<div class="modal-overlay" id="outputModelsModal" onclick="if(event.target===this) this.classList.remove('show')">
+  <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-header">
+      <div class="modal-title">📦 本地输出模型管理</div>
+      <div class="mac-btn close" onclick="document.getElementById('outputModelsModal').classList.remove('show')" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body">
+      <p style="margin-top:0; font-size: 13px; color: var(--text-secondary);">以下模型名称由本网关自动聚合生成，您可以在第三方工具中直接使用它们。</p>
+      <div id="outputModelList" style="margin-top: 10px; background: rgba(0,0,0,0.02); border: 1px solid var(--mac-border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Router Modal -->
+<div class="modal-overlay" id="routerModal" onclick="if(event.target===this) document.getElementById('routerModal').classList.remove('show')">
+  <div class="modal-content" style="max-width: 600px;">
+    <div class="modal-header">
+      <div class="modal-title">🔀 自定义路由配置</div>
+      <div class="mac-btn close" onclick="document.getElementById('routerModal').classList.remove('show')" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <input type="text" id="newRouterName" placeholder="路由名称 (如 vip-router)" style="flex:1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--mac-border); background: transparent; color: var(--text-primary); font-size: 13px; outline: none;">
+        <button class="btn btn-primary" onclick="addRouterGroup()">+ 添加路由</button>
+      </div>
+      <div id="routerListContainer" style="display:flex; flex-direction:column; gap:12px; max-height:400px; overflow-y:auto;">
+      </div>
+      <div style="margin-top:16px; display:flex; justify-content:flex-end;">
+        <button class="btn btn-primary" onclick="saveRouters()">保存所有路由</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+
+<!-- Feishu Modal -->
+<div class="modal-overlay" id="feishuModal" onclick="if(event.target===this) closeFeishuModal()">
+  <div class="modal-content" style="max-width: 800px; height: 80vh; display:flex; flex-direction:column;">
+    <div class="modal-header">
+      <div class="modal-title">📢 系统公告</div>
+      <div class="mac-btn close" onclick="closeFeishuModal()" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body" style="flex:1; padding:24px; overflow-y:auto;">
+      <div id="announcementMeta" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--mac-border);font-size:12px;color:var(--text-secondary);"></div>
+      <div id="announcementBody" style="font-size:14px;line-height:1.8;color:var(--text-primary);">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modelModal" onclick="if(event.target===this) closeModelManager()">
+  <div class="modal-content">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">管理模型</div>
+      <div class="mac-btn close" onclick="closeModelManager()" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom: 12px; display: flex; gap: 8px; justify-content: space-between; align-items: center;">
+        <div style="display: flex; gap: 8px;">
+          <button class="btn" onclick="selectAllModels(true)">全选</button>
+          <button class="btn" onclick="selectAllModels(false)">取消全选</button>
+        </div>
+        <input type="text" id="modalSearchInput" placeholder="搜索模型..." oninput="filterModalModels()" style="padding: 6px 10px; border-radius: 6px; border: 1px solid var(--mac-border); background: transparent; color: var(--text-primary); font-size: 13px; width: 200px; outline: none; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);">
+      </div>
+      <div id="modalModelList" style="min-height: 200px;">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span style="font-size: 13px; color: var(--text-secondary);" id="modalStatusText"></span>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn" onclick="closeModelManager()">取消</button>
+        <button class="btn btn-primary" onclick="saveModelSelection()">保存更改</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 提供商编辑/添加弹窗 -->
+<div class="modal-overlay" id="providerModal" onclick="if(event.target===this) closeProviderEditor()">
+  <div class="modal-content" style="max-width: 480px;">
+    <div class="modal-header">
+      <div class="modal-title" id="providerModalTitle">添加提供商</div>
+      <div class="mac-btn close" onclick="closeProviderEditor()" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label>提供商名称</label>
+        <input type="text" id="pf_name" placeholder="例如 OpenRouter">
+        <div class="form-hint" id="pf_name_hint" style="display:none;">编辑模式下名称不可修改</div>
+      </div>
+      <div class="form-field">
+        <label>Base URL</label>
+        <input type="text" id="pf_base_url" placeholder="https://api.example.com/v1">
+      </div>
+      <div class="form-field">
+        <label>API Key</label>
+        <input type="password" id="pf_api_key" placeholder="sk-...">
+        <label class="form-check" style="margin-top: 8px; margin-bottom: 0;">
+          <input type="checkbox" id="pf_show_key" onchange="document.getElementById('pf_api_key').type = this.checked ? 'text' : 'password';">
+          <span>显示密钥</span>
+        </label>
+      </div>
+      <label class="form-check">
+        <input type="checkbox" id="pf_free_only" checked>
+        <span>仅拉取免费模型 (free_only)</span>
+      </label>
+      <div id="providerModalMsg" style="font-size: 12px; display: none;"></div>
+    </div>
+    <div class="modal-footer">
+      <span style="font-size: 12px; color: var(--text-secondary);" id="providerModalHint"></span>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn" onclick="closeProviderEditor()">取消</button>
+        <button class="btn btn-primary" id="providerSaveBtn" onclick="submitProviderForm()">保存并拉取模型</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ 鉴权与 fetch 封装 ============ */
+const TOKEN_KEY = 'gateway_admin_token';
+function getToken() { return "{{ local_api_key }}"; }
+function setToken(t) {}
+function clearToken() {}
+
+function showGate() {}
+async function submitGate() {}
+
+async function apiFetch(url, options = {}) {
+  const token = getToken();
+  if (token) {
+    options.headers = Object.assign({}, options.headers || {}, { 'Authorization': 'Bearer ' + token });
+  }
+  const r = await fetch(url, options);
+  if (r.status === 401) {
+    clearToken();
+    showGate();
+    throw new Error('Unauthorized');
+  }
+  return r;
+}
+
+/* ============ Toast 提示 ============ */
+let _toastTimer = null;
+function showToast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = 'toast ' + type; }, 3000);
+}
+
+/* ============ 主题 ============ */
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    document.getElementById('themeBtn').innerHTML = '🌙 深色模式';
+    localStorage.setItem('theme', 'light');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.getElementById('themeBtn').innerHTML = '☀️ 浅色模式';
+    localStorage.setItem('theme', 'dark');
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  if (document.documentElement.getAttribute('data-theme') === 'dark') {
+    document.getElementById('themeBtn').innerHTML = '☀️ 浅色模式';
+  }
+});
+
+/* ============ 数据 ============ */
+let data = [];
+let stabilityData = [];
+let modelDetails = {};
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const oldText = btn.innerText;
+    btn.innerText = '已复制';
+    btn.style.background = 'rgba(50, 215, 75, 0.2)';
+    btn.style.color = '#32D74B';
+    setTimeout(() => { btn.innerText = oldText; btn.style.background = ''; btn.style.color = ''; }, 2000);
+  });
+}
+
+async function load() {
+  try {
+    const r = await apiFetch('/api/providers');
+    const list = await r.json();
+    data = [];
+    window.modelEnabledMap = {};
+
+    let providersHtml = '';
+    let providerOptionsHtml = '<option value="all">全部提供商</option>';
+    list.forEach(p => {
+      providerOptionsHtml += `<option value="${p.name}">${p.name}</option>`;
+      providersHtml += `
+        <div class="provider-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 6px; flex-wrap: wrap;">
+            <div class="p-name" style="margin-bottom: 0;">${p.name} Configuration</div>
+            <div style="display: flex; gap: 6px; flex-shrink: 0;">
+              <button class="btn" style="padding: 4px 8px; font-size: 11px;" onclick="openModelManager('${p.name}')">⚙️ 模型</button>
+              <button class="btn" style="padding: 4px 8px; font-size: 11px;" onclick="openProviderEditor('${p.name}')">✏️ 编辑</button>
+              <button class="btn" style="padding: 4px 8px; font-size: 11px; color: var(--danger);" onclick="deleteProvider('${p.name}')">🗑 删除</button>
+            </div>
+          </div>
+          <div class="copy-row">
+            <span>Base URL:</span>
+            <code>${p.base_url}</code>
+            <button class="btn-copy" onclick="copyText('${p.base_url}', this)">Copy</button>
+          </div>
+          <div class="copy-row">
+            <span>API Key:</span>
+            <code>${p.api_key_masked || '****'}</code>
+          </div>
+        </div>
+      `;
+      (p.models || []).forEach(m => {
+        window.modelEnabledMap[`${p.name}||${m}`] = !(p.disabled_models || []).includes(m);
+        const h = p.health?.[m] || { status: 'unknown' };
+        const d = modelDetails[m] || {};
+        const ctxLen = d.context_length || d.max_model_len || '--';
+        data.push({
+          provider: p.name, model: m, status: h.status || 'unknown',
+          latency_ms: h.latency_ms ?? null, code: h.code ?? null,
+          context_length: ctxLen
+        });
+      });
+    });
+
+    document.getElementById('providersSection').innerHTML = providersHtml;
+
+    const providerSelect = document.getElementById('providerFilter');
+    const currentVal = providerSelect.value;
+    providerSelect.innerHTML = providerOptionsHtml;
+    if ([...providerSelect.options].some(o => o.value === currentVal)) {
+      providerSelect.value = currentVal;
+    }
+
+    loadStability();
+    loadUsage();
+  } catch (e) {
+    if (e.message !== 'Unauthorized') console.error("Failed to load data:", e);
+  }
+}
+
+async function loadStability() {
+  const hours = document.getElementById('stabilityHours').value;
+  try {
+    const r = await apiFetch(`/api/stability?hours=${hours}`);
+    stabilityData = await r.json();
+    renderStability();
+  } catch (e) {
+    if (e.message !== 'Unauthorized') console.error("Failed to load stability:", e);
+  }
+}
+
+let usageDays = 1;
+async function loadUsage() {
+  try {
+    const r = await apiFetch(`/api/usage?days=${usageDays}`);
+    const data = await r.json();
+    renderUsage(data);
+  } catch (e) {
+    if (e.message !== 'Unauthorized') console.error("Failed to load usage:", e);
+  }
+}
+function switchUsageTab(days) {
+  usageDays = days;
+  document.querySelectorAll('.usage-tab').forEach(b => {
+    b.classList.toggle('btn-primary', Number(b.dataset.days) === days);
+  });
+  loadUsage();
+}
+function fmtNum(n) {
+  n = n || 0;
+  if (n < 10000) return n.toLocaleString();
+  if (n < 100000000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + ' 万';
+  return (n / 100000000).toFixed(2).replace(/\.?0+$/, '') + ' 亿';
+}
+function renderUsage(data) {
+  const t = data.total || {};
+  const cards = [
+    { label: '输入 Token', value: t.pt },
+    { label: '输出 Token', value: t.ct },
+    { label: '合计 Token', value: t.tt },
+    { label: '请求数', value: t.requests },
+  ];
+  document.getElementById('usageOverview').innerHTML = cards.map(c =>
+    `<div class="provider-card" style="padding: 14px 16px;">
+       <div style="font-size: 12px; color: var(--text-secondary);">${c.label}</div>
+       <div style="font-size: 22px; font-weight: 600; color: var(--text-primary); margin-top: 4px;">${fmtNum(c.value)}</div>
+     </div>`
+  ).join('');
+  const rows = data.by_model || [];
+  document.getElementById('usageBody').innerHTML = rows.length
+    ? rows.map(r => `<tr>
+        <td>
+          <div class="model-name" style="display: flex; align-items: center;">
+            <span class="model-provider-badge">${r.provider || 'unknown'}</span>
+            <span>${r.model || 'unknown'}</span>
+          </div>
+        </td>
+        <td>${fmtNum(r.requests)}</td>
+        <td>${fmtNum(r.pt)}</td>
+        <td>${fmtNum(r.ct)}</td>
+        <td>${fmtNum(r.tt)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无消耗记录</td></tr>';
+}
+
+function renderStability() {
+  const filter = document.getElementById('stableFilter').value;
+  const search = document.getElementById('stableSearch').value.toLowerCase();
+  const provider = document.getElementById('providerFilter').value;
+
+  let filtered = stabilityData.filter(d => {
+    if (provider !== 'all' && d.provider !== provider) return false;
+    if (search && !d.model.toLowerCase().includes(search)) return false;
+    if (filter === 'high') return d.availability >= 90;
+    if (filter === 'mid') return d.availability >= 50 && d.availability < 90;
+    if (filter === 'low') return d.availability < 50;
+    return true;
+  });
+
+  const tbody = document.getElementById('stableBody');
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No records found in this timeframe.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(d => {
+    const pct = typeof d.availability === 'number' ? d.availability.toFixed(1) : parseFloat(d.availability || 0).toFixed(1);
+    const barColor = pct >= 90 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
+    const avgL = d.avg_latency_ms !== null ? Math.round(d.avg_latency_ms) + ' ms' : '--';
+    const minL = d.min_latency_ms !== null ? Math.round(d.min_latency_ms) + ' ms' : '--';
+    const maxL = d.max_latency_ms !== null ? Math.round(d.max_latency_ms) + ' ms' : '--';
+
+    const detail = modelDetails[d.model] || {};
+    const ctxLen = detail.context_length || detail.max_model_len || '--';
+    const descHtml = detail.desc ? `<div class="model-desc">${detail.desc}</div>` : '';
+
+    let lastStatusHtml = '';
+    if (d.last_status === 'ok') {
+      lastStatusHtml = `<span title="上次巡检：正常" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-left:6px;"></span>`;
+    } else if (d.last_status === 'fail' || d.last_status === 'error') {
+      lastStatusHtml = `<span title="上次巡检：异常 (通常为提供商限流或报错)" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-left:6px;animation: pulse 2s infinite;"></span>`;
+    } else {
+      lastStatusHtml = `<span title="上次巡检：等待中..." style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-secondary);margin-left:6px;"></span>`;
+    }
+
+    return `<tr>
+      <td>
+        <div class="model-name" style="display: flex; align-items: center;">
+          <span class="model-provider-badge">${d.provider}</span>
+          <span>${d.model}</span>
+          ${lastStatusHtml}
+        </div>
+        ${descHtml}
+      </td>
+      <td>
+        <div class="avail-wrap">
+          <span class="avail-bar">
+            <span class="avail-bar-fill" style="width:${pct}%;background:${barColor}"></span>
+          </span>
+          <span class="avail-text" style="color:${barColor}">${pct}%</span>
+        </div>
+      </td>
+      <td><span class="ctx-cell" data-model="${d.model}" title="点击修改上下文长度" style="cursor:pointer;color:var(--text-secondary);font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace;font-size:12px;">${ctxLen === '--' ? '--' : ctxLen}</span></td>
+      <td style="color:var(--text-secondary)">${d.checks}</td>
+      <td style="font-variant-numeric:tabular-nums; font-size:12px;">
+        <span style="color:var(--success);font-weight:600">${d.ok}</span>
+        <span style="color:var(--text-secondary);margin:0 4px">/</span>
+        <span style="color:var(--danger);font-weight:600">${d.fail + d.error}</span>
+      </td>
+      <td class="latency ${d.avg_latency_ms && d.avg_latency_ms < 3000 ? 'fast' : d.avg_latency_ms && d.avg_latency_ms < 8000 ? 'medium' : ''}">${avgL}</td>
+      <td class="latency" style="font-size:12px;">
+        <span style="color:var(--success)">${minL}</span>
+        <span style="color:var(--text-secondary);margin:0 4px">~</span>
+        <span style="color:var(--text-secondary)">${maxL}</span>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function checkAll() {
+  const btn = document.getElementById('checkAllBtn');
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg> 检测中...';
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/check/all', { method: 'POST' });
+    const results = await r.json();
+    let ok = 0, fail = 0;
+    Object.values(results).forEach(v => { if (v && v.status === 'ok') ok++; else fail++; });
+    showToast(`检测完成：${ok} 正常 / ${fail} 异常`, fail > 0 ? 'warn' : 'ok');
+  } catch (e) {
+    if (e.message !== 'Unauthorized') { console.error("Check failed", e); showToast("检测请求失败", "error"); }
+  } finally {
+    btn.innerHTML = originalHtml;
+    btn.disabled = false;
+    load();
+  }
+}
+
+async function updatePollStatus() {
+  try {
+    const r = await apiFetch('/api/poll-status');
+    const d = await r.json();
+    if (d.last_poll_time > 0) {
+      const date = new Date(d.last_poll_time * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      const timeStr = `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+      document.getElementById('pollStatus').innerHTML = `上次同步：<span style="color:var(--text-primary);font-weight:500">${timeStr}</span> <span style="margin:0 8px;color:rgba(255,255,255,0.2)">|</span> 已扫描 <span style="color:var(--text-primary);font-weight:500">${d.total_models}</span> 个模型`;
+    } else {
+      document.getElementById('pollStatus').textContent = `初始化中… ${d.total_models} 个模型待扫描`;
+    }
+  } catch (e) {
+    if (e.message !== 'Unauthorized') {}
+  }
+}
+
+let currentManagingProvider = null;
+
+async function openModelManager(provider) {
+  currentManagingProvider = provider;
+  document.getElementById('modalTitle').innerText = `${provider} - 模型管理`;
+  document.getElementById('modalSearchInput').value = '';
+  document.getElementById('modalModelList').innerHTML = '<div class="empty">正在获取远端可用模型列表...<br><br><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg></div>';
+  document.getElementById('modalStatusText').innerText = '';
+  document.getElementById('modelModal').classList.add('show');
+
+  try {
+    const rProviders = await apiFetch('/api/providers');
+    const pList = await rProviders.json();
+    const pData = pList.find(p => p.name === provider);
+    const currentModels = new Set(pData ? (pData.models || []) : []);
+
+    const rAvailable = await apiFetch(`/api/providers/${provider}/available-models`);
+    const availableData = await rAvailable.json();
+    if (!availableData.ok) throw new Error("API返回错误");
+
+    const allModels = availableData.models || [];
+    if (allModels.length === 0) {
+      document.getElementById('modalModelList').innerHTML = '<div class="empty">该供应商未返回任何可用模型。</div>';
+      return;
+    }
+    currentModels.forEach(m => { if (!allModels.includes(m)) allModels.push(m); });
+    allModels.sort();
+
+    let html = '';
+    allModels.forEach(m => {
+      const isChecked = currentModels.has(m) ? 'checked' : '';
+      html += `
+        <label class="model-checkbox-item">
+          <input type="checkbox" class="modal-model-checkbox" value="${m}" ${isChecked}>
+          <div class="model-checkbox-label">${m}</div>
+        </label>`;
+    });
+    document.getElementById('modalModelList').innerHTML = html;
+    document.getElementById('modalStatusText').innerText = `共加载了 ${allModels.length} 个模型`;
+  } catch (e) {
+    if (e.message === 'Unauthorized') return;
+    console.error(e);
+    document.getElementById('modalModelList').innerHTML = '<div class="empty" style="color:var(--danger)">获取可用模型列表失败，请检查网络或后端日志。</div>';
+  }
+}
+
+function closeModelManager() {
+  document.getElementById('modelModal').classList.remove('show');
+  currentManagingProvider = null;
+}
+
+function filterModalModels() {
+  const query = document.getElementById('modalSearchInput').value.toLowerCase();
+  document.querySelectorAll('.model-checkbox-item').forEach(item => {
+    const label = item.querySelector('.model-checkbox-label').innerText.toLowerCase();
+    item.style.display = label.includes(query) ? 'flex' : 'none';
+  });
+}
+
+function selectAllModels(check) {
+  document.querySelectorAll('.model-checkbox-item').forEach(item => {
+    if (item.style.display !== 'none') item.querySelector('.modal-model-checkbox').checked = check;
+  });
+}
+
+async function saveModelSelection() {
+  if (!currentManagingProvider) return;
+  const selectedModels = [];
+  document.querySelectorAll('.modal-model-checkbox').forEach(cb => { if (cb.checked) selectedModels.push(cb.value); });
+
+  const btn = document.querySelector('#modelModal .btn-primary');
+  const originalText = btn.innerText;
+  btn.innerText = '保存中...';
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/providers/${currentManagingProvider}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models: selectedModels })
+    });
+    if (res.ok) {
+      closeModelManager();
+      load();
+      checkAll();
+    } else {
+      alert("保存失败");
+    }
+  } catch (e) {
+    if (e.message !== 'Unauthorized') { console.error(e); alert("请求发生错误"); }
+  } finally {
+    btn.innerText = originalText;
+    btn.disabled = false;
+  }
+}
+
+/* ============ 提供商增删改 ============ */
+let providerEditMode = 'add';
+let providerEditName = null;
+
+async function openProviderEditor(name) {
+  providerEditMode = name ? 'edit' : 'add';
+  providerEditName = name || null;
+  const titleEl = document.getElementById('providerModalTitle');
+  const saveBtn = document.getElementById('providerSaveBtn');
+  const nameInput = document.getElementById('pf_name');
+  const nameHint = document.getElementById('pf_name_hint');
+  const hintEl = document.getElementById('providerModalHint');
+  const msgEl = document.getElementById('providerModalMsg');
+  msgEl.innerHTML = '';
+  msgEl.style.display = 'none';
+
+  if (providerEditMode === 'edit') {
+    titleEl.innerText = '编辑提供商';
+    saveBtn.innerText = '保存修改';
+    hintEl.innerText = '保存后不会改变已选模型列表，仅更新连接信息';
+    nameInput.value = name;
+    nameInput.disabled = true;
+    nameHint.style.display = 'block';
+    try {
+      const r = await apiFetch('/api/providers');
+      const list = await r.json();
+      const p = list.find(x => x.name === name) || {};
+      document.getElementById('pf_base_url').value = p.base_url || '';
+      document.getElementById('pf_free_only').checked = p.free_only !== false;
+    } catch (e) { if (e.message !== 'Unauthorized') console.error(e); }
+    document.getElementById('pf_api_key').value = '';
+    document.getElementById('pf_api_key').placeholder = '留空表示不修改密钥';
+  } else {
+    titleEl.innerText = '添加提供商';
+    saveBtn.innerText = '保存并拉取模型';
+    hintEl.innerText = '保存后将自动从上游拉取可用模型列表';
+    nameInput.value = '';
+    nameInput.disabled = false;
+    nameHint.style.display = 'none';
+    document.getElementById('pf_base_url').value = '';
+    document.getElementById('pf_api_key').value = '';
+    document.getElementById('pf_api_key').placeholder = 'sk-...';
+    document.getElementById('pf_free_only').checked = true;
+  }
+  document.getElementById('pf_show_key').checked = false;
+  document.getElementById('pf_api_key').type = 'password';
+  document.getElementById('providerModal').classList.add('show');
+}
+
+function closeProviderEditor() {
+  document.getElementById('providerModal').classList.remove('show');
+  providerEditName = null;
+}
+
+async function openOutputModelsModal() {
+  document.getElementById('outputModelsModal').classList.add('show');
+  document.getElementById('outputModelList').innerHTML = '<div class="empty">获取中...</div>';
+  try {
+    const res = await apiFetch('/v1/models');
+    if (!res.ok) throw new Error('Failed to fetch models');
+    const data = await res.json();
+    let models = data.data.map(m => m.id);
+    models.sort();
+    
+    if (models.length === 0) {
+      document.getElementById('outputModelList').innerHTML = '<div class="empty">暂无可输出模型</div>';
+      return;
+    }
+    
+    let html = '';
+    models.forEach(m => {
+      html += `
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--mac-window-bg); border: 1px solid var(--mac-border); border-radius: 6px;">
+        <span style="font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-primary); font-weight: 500;">${m}</span>
+        <button class="btn" style="padding: 4px 8px; font-size: 12px;" onclick="copyText('${m}', this)">Copy</button>
+      </div>`;
+    });
+    document.getElementById('outputModelList').innerHTML = html;
+  } catch (e) {
+    document.getElementById('outputModelList').innerHTML = '<div class="empty" style="color:var(--danger)">获取失败</div>';
+  }
+}
+
+function showProviderMsg(msg, type) {
+  const el = document.getElementById('providerModalMsg');
+  const color = type === 'error' ? 'var(--danger)' : 'var(--success)';
+  el.innerHTML = '<span style="color:' + color + '">' + msg + '</span>';
+  el.style.display = 'block';
+}
+
+async function submitProviderForm() {
+  const name = document.getElementById('pf_name').value.trim();
+  const baseUrl = document.getElementById('pf_base_url').value.trim();
+  const apiKey = document.getElementById('pf_api_key').value;
+  const freeOnly = document.getElementById('pf_free_only').checked;
+
+  if (!name || !baseUrl) { showProviderMsg('名称和 Base URL 不能为空', 'error'); return; }
+  if (providerEditMode === 'add' && !apiKey) { showProviderMsg('添加时必须填写 API Key', 'error'); return; }
+
+  const btn = document.getElementById('providerSaveBtn');
+  const originalText = btn.innerText;
+  btn.innerText = '处理中...';
+  btn.disabled = true;
+
+  try {
+    let res;
+    if (providerEditMode === 'add') {
+      res = await apiFetch('/api/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, base_url: baseUrl, api_key: apiKey, free_only: freeOnly })
+      });
+    } else {
+      const body = { base_url: baseUrl, free_only: freeOnly };
+      if (apiKey) body.api_key = apiKey;
+      res = await apiFetch('/api/providers/' + encodeURIComponent(providerEditName), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    }
+    if (res.ok) {
+      const wasAdd = providerEditMode === 'add';
+      closeProviderEditor();
+      showToast(wasAdd ? '提供商已添加，模型列表已自动拉取' : '提供商信息已更新', 'ok');
+      await load();
+      if (wasAdd) checkAll();
+    } else {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (_) {}
+      showProviderMsg('操作失败：' + (detail || ('HTTP ' + res.status)), 'error');
+    }
+  } catch (e) {
+    if (e.message !== 'Unauthorized') { console.error(e); showProviderMsg('请求错误：' + e.message, 'error'); }
+  } finally {
+    btn.innerText = originalText;
+    btn.disabled = false;
+  }
+}
+
+async function deleteProvider(name) {
+  if (!confirm('确定删除提供商「' + name + '」吗？\n该操作会从 providers.json 移除该提供商及其模型配置，不可恢复。')) return;
+  try {
+    const res = await apiFetch('/api/providers/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (res.ok) { showToast('已删除提供商「' + name + '」', 'ok'); load(); }
+    else { showToast('删除失败', 'error'); }
+  } catch (e) {
+    if (e.message !== 'Unauthorized') { console.error(e); showToast('删除请求错误', 'error'); }
+  }
+}
+
+/* ============ 轮询与可见性 ============ */
+let loadTimer = null, pollTimer = null, detailTimer = null;
+async function loadModelDetails() {
+  try {
+    const r = await apiFetch('/api/model-details');
+    modelDetails = await r.json();
+    renderStability();
+  } catch (e) { if (e.message !== 'Unauthorized') console.error("Failed to load model details:", e); }
+}
+function startPolling() {
+  if (loadTimer) clearInterval(loadTimer);
+  if (pollTimer) clearInterval(pollTimer);
+  if (detailTimer) clearInterval(detailTimer);
+  loadTimer = setInterval(load, 5000);
+  pollTimer = setInterval(updatePollStatus, 3000);
+  detailTimer = setInterval(loadModelDetails, 30000);
+}
+function stopPolling() {
+  if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (detailTimer) { clearInterval(detailTimer); detailTimer = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopPolling();
+  else if (getToken()) { load(); updatePollStatus(); startPolling(); }
+});
+
+function switchMainTab(tab) {
+  const monitorBtn = document.getElementById('tab-monitor');
+  const usageBtn = document.getElementById('tab-usage');
+  const monitorView = document.getElementById('monitor-view');
+  const usageView = document.getElementById('usage-view');
+  
+  if (tab === 'monitor') {
+    monitorBtn.style.background = 'var(--mac-window-bg)';
+    monitorBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+    monitorBtn.style.color = 'var(--text-primary)';
+    monitorBtn.style.fontWeight = '600';
+    
+    usageBtn.style.background = 'transparent';
+    usageBtn.style.boxShadow = 'none';
+    usageBtn.style.color = 'var(--text-secondary)';
+    usageBtn.style.fontWeight = '500';
+    
+    monitorView.style.display = 'block';
+    usageView.style.display = 'none';
+  } else {
+    usageBtn.style.background = 'var(--mac-window-bg)';
+    usageBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+    usageBtn.style.color = 'var(--text-primary)';
+    usageBtn.style.fontWeight = '600';
+    
+    monitorBtn.style.background = 'transparent';
+    monitorBtn.style.boxShadow = 'none';
+    monitorBtn.style.color = 'var(--text-secondary)';
+    monitorBtn.style.fontWeight = '500';
+    
+    monitorView.style.display = 'none';
+    usageView.style.display = 'block';
+    
+    if (document.getElementById('usageOverview').innerHTML === '') {
+      loadUsage(1);
+    }
+  }
+}
+
+/* ============ 路由配置 ============ */
+function fmtCtx(n) {
+  if (!n) return '';
+  if (n >= 1048576) return (n / 1048576) + 'M';
+  if (n >= 1024) return Math.round(n / 1024) + 'K';
+  return String(n);
+}
+let routersData = {};
+let allModelOptions = [];   // [{provider, model}]
+
+async function openRouterManager() {
+  document.getElementById('routerModal').classList.add('show');
+  document.getElementById('newRouterName').value = '';
+  // 1. 拉取所有可用模型 + 模型详情（用于显示上下文长度）
+  try {
+    const r = await apiFetch('/api/providers');
+    const list = await r.json();
+    allModelOptions = [];
+    list.forEach(p => {
+      (p.models || []).forEach(m => {
+        allModelOptions.push({ provider: p.name, model: m });
+      });
+    });
+  } catch (e) { if (e.message !== 'Unauthorized') console.error(e); }
+  // 2. 拉取已保存的路由
+  try {
+    const r = await apiFetch('/api/routers');
+    const d = await r.json();
+    routersData = d.data || {};
+  } catch (e) { if (e.message !== 'Unauthorized') console.error(e); routersData = {}; }
+  renderRouterList();
+}
+
+function renderRouterList() {
+  const container = document.getElementById('routerListContainer');
+  const names = Object.keys(routersData);
+  if (names.length === 0) {
+    container.innerHTML = '<div class="empty">暂无路由组，请在上方输入名称后点击"+ 添加路由"</div>';
+    return;
+  }
+  if (allModelOptions.length === 0) {
+    container.innerHTML = '<div class="empty" style="color:var(--danger)">未获取到任何模型，请先配置上游提供商</div>';
+    return;
+  }
+  container.innerHTML = names.map(name => {
+    const selected = new Set(routersData[name] || []);
+    const boxes = allModelOptions.map(opt => {
+      const checked = selected.has(opt.model) ? 'checked' : '';
+      const ctx = (modelDetails[opt.model] || {}).context_length;
+      const ctxStr = ctx ? ' · ' + ctx : '';
+      return `<label class="model-checkbox-item" style="padding:6px 10px;margin-bottom:4px;">
+        <input type="checkbox" class="router-model-cb" data-router="${name}" value="${opt.model}" ${checked}>
+        <div class="model-checkbox-label" style="font-size:13px;"><span class="model-provider-badge">${opt.provider}</span>${opt.model}<span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">${ctxStr}</span></div>
+      </label>`;
+    }).join('');
+    return `<div style="border:1px solid var(--mac-border);border-radius:8px;padding:12px;background:rgba(255,255,255,0.4);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-weight:600;font-size:14px;">🔀 ${name} <span style="font-size:11px;color:var(--text-secondary);font-weight:400;">(客户端 model 字段填这个名称即可命中)</span></div>
+        <button class="btn" style="padding:3px 8px;font-size:11px;color:var(--danger);" onclick="removeRouterGroup('${name}')">删除</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;">${boxes}</div>
+    </div>`;
+  }).join('');
+}
+
+function addRouterGroup() {
+  const name = document.getElementById('newRouterName').value.trim();
+  if (!name) { showToast('请输入路由名称', 'warn'); return; }
+  if (routersData.hasOwnProperty(name)) { showToast('该路由名称已存在', 'warn'); return; }
+  routersData[name] = [];
+  document.getElementById('newRouterName').value = '';
+  renderRouterList();
+}
+
+function removeRouterGroup(name) {
+  if (!confirm('确定删除路由组「' + name + '」？')) return;
+  delete routersData[name];
+  renderRouterList();
+}
+
+async function saveRouters() {
+  // 先从 DOM 收集勾选状态
+  const collected = {};
+  document.querySelectorAll('.router-model-cb').forEach(cb => {
+    const router = cb.dataset.router;
+    if (!collected[router]) collected[router] = [];
+    if (cb.checked) collected[router].push(cb.value);
+  });
+  // 合并：保留 collected 里没有出现过的路由组（空数组）
+  Object.keys(routersData).forEach(k => {
+    if (!collected.hasOwnProperty(k)) collected[k] = routersData[k] || [];
+  });
+  routersData = collected;
+  try {
+    const r = await apiFetch('/api/routers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(routersData)
+    });
+    if (r.ok) showToast('路由配置已保存', 'ok');
+    else { showToast('保存失败', 'error'); }
+  } catch (e) { if (e.message !== 'Unauthorized') { console.error(e); showToast('保存请求错误', 'error'); } }
+}
+
+/* ============ 系统公告 ============ */
+function renderMarkdown(md) {
+  if (!md || !md.trim()) return '<div class="empty">暂无公告</div>';
+  let html = md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  html = html.replace(/```([\s\S]*?)```/g, (m, c) => '<pre><code>' + c.replace(/^\n/, '') + '</code></pre>');
+  html = html.replace(/^#### (.*)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.*)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  html = html.replace(/^---$/gm, '<hr>');
+  html = html.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
+  const lines = html.split('\n');
+  let out = '', inList = false;
+  for (let line of lines) {
+    if (/^- /.test(line)) {
+      if (!inList) { out += '<ul>'; inList = true; }
+      out += '<li>' + line.slice(2) + '</li>';
+    } else {
+      if (inList) { out += '</ul>'; inList = false; }
+      out += line + '\n';
+    }
+  }
+  if (inList) out += '</ul>';
+  html = out;
+  html = html.split(/\n\n+/).map(b => {
+    const t = b.trim();
+    if (!t) return '';
+    if (/^<(h\d|ul|pre|hr|blockquote)/.test(t)) return t;
+    return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
+  }).join('\n');
+  return html;
+}
+
+async function openFeishuModal() {
+  document.getElementById('feishuModal').classList.add('show');
+  const body = document.getElementById('announcementBody');
+  const meta = document.getElementById('announcementMeta');
+  meta.style.display = 'none';
+  body.innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    const r = await apiFetch('/api/announcement');
+    const d = await r.json();
+    if (!d.ok) { body.innerHTML = '<div class="empty">' + (d.content || '暂无公告') + '</div>'; return; }
+    const md = d.content || '';
+    body.innerHTML = renderMarkdown(md);
+  } catch (e) {
+    if (e.message !== 'Unauthorized') { console.error(e); body.innerHTML = '<div class="empty" style="color:var(--danger)">加载失败</div>'; }
+  }
+}
+function closeFeishuModal() {
+  document.getElementById('feishuModal').classList.remove('show');
+}
+
+/* ============ 上下文长度 inline 编辑 ============ */
+document.addEventListener('click', e => {
+  const cell = e.target.closest('.ctx-cell');
+  if (!cell || cell.querySelector('input')) return;
+  const model = cell.dataset.model;
+  const raw = cell.textContent.replace(/,/g, '').trim();
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.value = raw === '--' ? '' : raw;
+  input.style.cssText = 'width:100px;padding:2px 4px;font-size:12px;font-family:ui-monospace,monospace;border:1px solid var(--accent-primary);border-radius:4px;background:#fff;color:var(--text-primary);outline:none;box-sizing:border-box;';
+  cell.textContent = '';
+  cell.appendChild(input);
+  input.focus(); input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    if (!save) { cell.textContent = raw; return; }
+    const v = parseInt(input.value, 10);
+    if (!v || v <= 0) { cell.textContent = raw; return; }
+    try {
+      const r = await apiFetch('/api/context-limits', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model, context_length: v })
+      });
+      if (r.ok) {
+        showToast(`已更新 ${model} = ${v}`, 'ok');
+        if (modelDetails[model]) modelDetails[model].context_length = v;
+        else modelDetails[model] = { context_length: v };
+        cell.textContent = String(v);
+        loadStability();
+      }
+      else { showToast('更新失败', 'error'); cell.textContent = raw; }
+    } catch (e) {
+      if (e.message !== 'Unauthorized') { console.error(e); showToast('请求错误', 'error'); }
+      cell.textContent = raw;
+    }
+  };
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+  });
+});
+
+/* ============ 启动 ============ */
+function startApp() {
+  loadModelDetails(); load(); updatePollStatus(); startPolling();
+  openFeishuModal();
+}
+function acceptDisclaimer() {
+  localStorage.setItem('disclaimer_accepted', '1');
+  document.getElementById('disclaimerGate').classList.remove('show');
+  startApp();
+}
+(function init() {
+  if (localStorage.getItem('disclaimer_accepted') === '1') {
+    startApp();
+  } else {
+    document.getElementById('disclaimerGate').classList.add('show');
+  }
+})();
+</script>
+</body>
+</html>

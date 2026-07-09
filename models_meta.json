@@ -1,0 +1,180 @@
+{
+  "aliases": {
+    "mistralai/mistral-small-2603": "mistralai/mistral-small-4-119b-2603",
+    "mistralai/mistral-large-2512": "mistralai/mistral-large-3-675b-instruct-2512",
+    "MiniMax/MiniMax-M3": "minimaxai/minimax-m3",
+    "ZhipuAI/GLM-5.2": "glm-5.2",
+    "ZhipuAI/GLM-5.1": "glm-5.1",
+    "deepseek-ai/DeepSeek-V4-Flash": "deepseek-ai/deepseek-v4-flash",
+    "deepseek-ai/DeepSeek-V4-Pro": "deepseek-ai/deepseek-v4-pro"
+  },
+  "context_limits": {
+    "mistralai/mistral-small-2603": 262144,
+    "mistralai/mistral-small-4-119b-2603": 262144,
+    "mistralai/mistral-large-2512": 262144,
+    "mistralai/mistral-large-3-675b-instruct-2512": 262144,
+    "mistralai/mistral-medium-3.5-128b": 262144,
+    "nvidia/nemotron-3-super-120b-a12b": 262144,
+    "nvidia/nemotron-3-ultra-550b-a55b": 262144,
+    "openai/gpt-oss-120b": 131072,
+    "moonshotai/kimi-k2.6": 262144,
+    "sensenova-6.7-flash-lite": 131072,
+    "deepseek-ai/deepseek-v4-flash": 1048576,
+    "deepseek-ai/deepseek-v4-pro": 1048576,
+    "deepseek-v4-flash": 1048576,
+    "qwen/qwen3.5-122b-a10b": 262144,
+    "minimaxai/minimax-m3": 1048576,
+    "minimaxai/minimax-m2.7": 204800,
+    "glm-5.2": 1048576,
+    "glm-5.1": 131072,
+    "sensenova-u1-fast": 32768,
+    "gemini-3.5-flash": 1048576,
+    "Qwen/Qwen3.5-122B-A10B": 262144,
+    "Qwen/Qwen3.5-397B-A17B": 262144
+  },
+  "non_chat_keywords": [
+    "embed",
+    "asr",
+    "tts",
+    "safety",
+    "guard",
+    "reward",
+    "detect",
+    "moderat",
+    "classify",
+    "rerank",
+    "search",
+    "image",
+    "audio",
+    "safeguard",
+    "oss-safeguard",
+    "content-safety",
+    "vl-embedding",
+    "text-embedding",
+    "gemini-embedding",
+    "lyria",
+    "clip-preview",
+    "owl-alpha",
+    "relace",
+    "ui-tars",
+    "bodybuilder",
+    "pareto",
+    "fusion",
+    "auto",
+    "weaver",
+    "router",
+    "switchpoint",
+    "bge-",
+    "starcoder",
+    "codegemma",
+    "gemma-2b",
+    "gemma-2-2b",
+    "recurrentgemma",
+    "deplot",
+    "fuyu",
+    "kosmos",
+    "neva",
+    "vila",
+    "nvclip",
+    "gliner",
+    "nemoretriever",
+    "nemotron-parse",
+    "riva-translate",
+    "ising-calibration",
+    "cosmos-reason",
+    "nemotron-mini-4b",
+    "nemotron-nano-3-",
+    "chatqa",
+    "minitron"
+  ],
+  "model_descriptions": {
+    "sensenova-6.7-flash-lite": {
+      "ctx": 131072,
+      "desc": "商汤轻量多模态，图文通用，原生支持 128K 上下文"
+    },
+    "deepseek-ai/deepseek-v4-flash": {
+      "ctx": 1048576,
+      "desc": "DeepSeek V4 高性价比 MoE，原生百万上下文，支持长代码库一次性输入"
+    },
+    "deepseek-v4-flash": {
+      "ctx": 1048576,
+      "desc": "DeepSeek V4 高性价比 MoE，原生百万上下文，支持长代码库一次性输入"
+    },
+    "deepseek-ai/deepseek-v4-pro": {
+      "ctx": 1048576,
+      "desc": "DeepSeek V4 旗舰模型，最高支持 1M 超大上下文"
+    },
+    "qwen/qwen3.5-122b-a10b": {
+      "ctx": 262144,
+      "desc": "通义千问 122B 模型，支持高达 256K 上下文长度"
+    },
+    "minimaxai/minimax-m3": {
+      "ctx": 1048576,
+      "desc": "MiniMax-M3 旗舰大模型，支持原生 1M 超长上下文输入"
+    },
+    "minimaxai/minimax-m2.7": {
+      "ctx": 204800,
+      "desc": "MiniMax-M2.7 模型，支持 200K 上下文长度"
+    },
+    "mistralai/mistral-medium-3.5-128b": {
+      "ctx": 262144,
+      "desc": "Mistral Medium 128B，具备 256K 原生上下文支持"
+    },
+    "mistralai/mistral-small-4-119b-2603": {
+      "ctx": 262144,
+      "desc": "Mistral 中型 MoE，兼顾推理 / 代码，多模态图文支持"
+    },
+    "mistralai/mistral-small-2603": {
+      "ctx": 262144,
+      "desc": "Mistral 中型 MoE，兼顾推理 / 代码，多模态图文支持"
+    },
+    "glm-5.1": {
+      "ctx": 131072,
+      "desc": "智谱 GLM-5.1 模型，支持 128K 上下文"
+    },
+    "glm-5.2": {
+      "ctx": 1048576,
+      "desc": "智谱旗舰推理模型，纯文本 / 代码，原生百万上下文，最大输出 128K token"
+    },
+    "mistralai/mistral-large-3-675b-instruct-2512": {
+      "ctx": 262144,
+      "desc": "Mistral 旗舰 675B MoE，全能力均衡多模态模型"
+    },
+    "mistralai/mistral-large-2512": {
+      "ctx": 262144,
+      "desc": "Mistral 旗舰 675B MoE，全能力均衡多模态模型"
+    },
+    "moonshotai/kimi-k2.6": {
+      "ctx": 262144,
+      "desc": "月之暗面万亿参数 MoE，Agent / 工程代码专精，原生支持长流程工具调用"
+    },
+    "nvidia/nemotron-3-super-120b-a12b": {
+      "ctx": 262144,
+      "desc": "NVIDIA 高效 120B MoE，英伟达在线 API 实际可用约 256K 上下文"
+    },
+    "nvidia/nemotron-3-super-120b-a12b:free": {
+      "ctx": 262144,
+      "desc": "NVIDIA 高效 120B MoE，英伟达在线 API 实际可用约 256K 上下文"
+    },
+    "openai/gpt-oss-120b": {
+      "ctx": 131072,
+      "desc": "OpenAI 开源 120B (117B MoE)，原生 131K 上下文"
+    },
+    "nvidia/nemotron-3-ultra-550b-a55b": {
+      "ctx": 262144,
+      "desc": "NVIDIA 旗舰 550B MoE，英伟达在线 API 实际可用约 256K 上下文"
+    },
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "ctx": 262144,
+      "desc": "NVIDIA 旗舰 550B MoE，英伟达在线 API 实际可用约 256K 上下文"
+    },
+    "sensenova-u1-fast": {
+      "ctx": 32768,
+      "desc": "商汤旗舰多模态，针对图文混合场景优化，原生 32K 上下文"
+    },
+    "gemini-3.5-flash": {
+      "ctx": 1048576,
+      "desc": "Gemini 3.5 Flash 最新版，原生百万上下文支持"
+    }
+  }
+}
