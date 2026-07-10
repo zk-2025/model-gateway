@@ -644,27 +644,6 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
         random.shuffle(raw)
         return [(p, m) for p, m, _ in raw]
         
-    # 2. 如果请求的是内置的 1m 路由
-    if model == "auto-router-1m":
-        for p in providers:
-            for m in get_enabled_models(p):
-                if not is_1m_model(m):
-                    continue
-                k = f"{p['name']}||{m}"
-                st = health_status.get(k, {}).get("status")
-                if not is_circuit_open(k) and st in ("ok", None, "unknown"):
-                    raw.append((p, m, k))
-                else:
-                    unhealthy_raw.append((p, m, k))
-        if not raw:
-            raw = unhealthy_raw
-        scored = [
-            (get_quality_score(k), get_avg_latency(k) or 1e9, p, m)
-            for p, m, k in raw
-        ]
-        scored.sort(key=lambda x: (-x[0], x[1]))
-        return [(p, m) for _, _, p, m in scored]
-        
     # 3. 如果请求的是具体模型
     for p in providers:
         for m in get_enabled_models(p):
@@ -1320,19 +1299,9 @@ async def proxy_chat(request: Request, force: bool = False):
 
 @app.api_route("/v1/models", methods=["GET"], dependencies=[Depends(verify_client)])
 async def proxy_models():
-    models_list = [
-        {
-            "id": "auto-router-1m",
-            "object": "model",
-            "owned_by": "System",
-            "available": True,
-            "context_length": ONE_MILLION,
-            "max_position_embeddings": ONE_MILLION,
-            "max_model_len": ONE_MILLION,
-        }
-    ]
+    models_list = []
 
-    # 自定义路由组也作为可输出的模型
+    # 自定义路由组作为可输出的模型
     for router_name in ROUTERS:
         models_list.append({
             "id": router_name,
