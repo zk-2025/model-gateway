@@ -1337,18 +1337,73 @@ if __name__ == "__main__":
     import threading
     import webview
     import time
-    
+    from PIL import Image, ImageDraw
+    import pystray
+
+    # ---- 生成托盘图标（纯几何图形，不依赖外部图片文件） ----
+    def create_tray_icon():
+        img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        # 蓝色圆角底
+        draw.rounded_rectangle([4, 4, 60, 60], radius=14, fill=(30, 144, 255))
+        # 白色右箭头，代表"网关/转发"
+        draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
+        return img
+
+    # ---- 全局状态：quitting 用于区分"点X隐藏"与"托盘退出" ----
+    state = {"window": None, "quitting": False}
+
+    # ---- 托盘菜单回调 ----
+    def on_show(icon, item):
+        w = state["window"]
+        if w:
+            w.show()
+
+    def on_quit(icon, item):
+        state["quitting"] = True
+        icon.stop()
+        w = state["window"]
+        if w:
+            w.destroy()
+
+    tray_icon = pystray.Icon(
+        "model-gateway",
+        create_tray_icon(),
+        "无限额度监控网关",
+        menu=pystray.Menu(
+            pystray.MenuItem("显示窗口", on_show, default=True),
+            pystray.MenuItem("退出", on_quit),
+        ),
+    )
+
+    # ---- FastAPI 服务器（daemon 线程，主进程退出时自动结束） ----
     def start_server():
         uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
-        
-    t = threading.Thread(target=start_server)
-    t.daemon = True
+
+    t = threading.Thread(target=start_server, daemon=True)
     t.start()
-    
+
     # 给一点点时间让 FastAPI 绑定端口
     time.sleep(1)
-    
-    # 创建原生的桌面窗口
-    webview.create_window('无限额度监控网关', 'http://127.0.0.1:8000/', width=1200, height=800)
+
+    # ---- 创建原生的桌面窗口 ----
+    window = webview.create_window(
+        '无限额度监控网关', 'http://127.0.0.1:8000/', width=1200, height=800
+    )
+    state["window"] = window
+
+    # ---- 拦截关闭：点 X 时隐藏到托盘，而非退出程序 ----
+    def on_closing():
+        if state["quitting"]:
+            return  # 退出流程：放行，允许真正关闭
+        window.hide()
+        return False  # 阻止关闭，仅隐藏窗口
+
+    window.events.closing += on_closing
+
+    # ---- 启动系统托盘（独立 daemon 线程） ----
+    threading.Thread(target=tray_icon.run, daemon=True).start()
+
+    # ---- 启动 webview（主线程阻塞，窗口全部关闭后返回） ----
     webview.start()
 
