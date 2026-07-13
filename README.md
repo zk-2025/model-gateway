@@ -187,14 +187,5 @@ pyinstaller 网关客户端.spec --noconfirm
 
 ---
 
-## ⚠️ 免责声明
-
-- 本程序为**公益项目，不为盈利**，仅供学习交流与测试使用
-- 请于下载后 **24 小时内删除**，严禁用于任何商业用途
-- 使用者需对自己的一切行为负责，作者不承担任何法律责任
-- 请遵守各上游 API 提供商的服务条款
-
----
-
 ## 📄 License
 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)

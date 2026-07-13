@@ -517,19 +517,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 <!-- 管理门禁 -->
 <!-- Removed Gate Overlay -->
 
-<!-- 首次免责声明 -->
-<div class="gate-overlay" id="disclaimerGate">
-  <div class="gate-box" style="max-width:480px;">
-    <h2>📝 使用声明</h2>
-    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;margin-bottom:18px;text-align:left;">
-      <p style="margin-bottom:10px;">⚠️ 使用本程序前请先查看「💡 使用说明」。</p>
-      <p style="margin-bottom:10px;">本程序为<b style="color:var(--text-primary);">公益项目，不为盈利</b>，仅供学习交流与测试使用。</p>
-      <p style="margin-bottom:10px;">请于下载后 <b style="color:var(--danger);">24 小时内删除</b>，严禁用于任何商业用途。</p>
-      <p>使用者需对自己的一切行为负责，作者不承担任何法律责任。</p>
-    </div>
-    <button class="btn btn-primary" onclick="acceptDisclaimer()" style="width:100%;justify-content:center;">我已阅读并同意</button>
-  </div>
-</div>
+
 
 <div class="toast" id="toast"></div>
 
@@ -1670,18 +1658,7 @@ function startApp() {
   loadModelDetails(); load(); updatePollStatus(); startPolling();
   openFeishuModal();
 }
-function acceptDisclaimer() {
-  localStorage.setItem('disclaimer_accepted', '1');
-  document.getElementById('disclaimerGate').classList.remove('show');
-  startApp();
-}
-(function init() {
-  if (localStorage.getItem('disclaimer_accepted') === '1') {
-    startApp();
-  } else {
-    document.getElementById('disclaimerGate').classList.add('show');
-  }
-})();
+startApp();
 </script>
 </body>
 </html>
