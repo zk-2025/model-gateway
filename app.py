@@ -1199,6 +1199,7 @@ async def _try_stream_forward(url, body, headers, key, provider_name, model):
     async def gen():
         prefix = f"🤖 {provider_name} · {model}"
         prefix_done = False
+        reasoning_open = False
         usage_obj = None
         try:
             async for line in resp.aiter_lines():
@@ -1209,22 +1210,38 @@ async def _try_stream_forward(url, body, headers, key, provider_name, model):
                     continue
                 data_str = line[6:]
                 if data_str.strip() == "[DONE]":
+                    if reasoning_open:
+                        yield "data: " + json.dumps({"choices": [{"delta": {"content": "</think>"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
+                        reasoning_open = False
                     yield "data: [DONE]\n\n"
                     break
                 try:
                     obj = json.loads(data_str)
-                    obj = merge_reasoning(obj)
                     if obj.get("usage"):
                         usage_obj = obj["usage"]
                     if "model" in obj and isinstance(obj["model"], str):
                         obj["model"] = f"{provider_name} · {model}"
+                    choices = obj.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        rc = delta.pop("reasoning_content", None)
+                        if rc is not None:
+                            if not reasoning_open:
+                                reasoning_open = True
+                                rc = "<think>" + rc
+                            delta["content"] = rc
+                        elif reasoning_open and delta.get("content") is not None:
+                            reasoning_open = False
+                            delta["content"] = "</think>" + (delta["content"] or "")
+                        elif reasoning_open and delta.get("content") is None:
+                            pass
                     if not prefix_done:
-                        choices = obj.get("choices") or []
-                        if choices:
-                            delta = choices[0].get("delta") or {}
-                            c = delta.get("content")
+                        choices2 = obj.get("choices") or []
+                        if choices2:
+                            delta2 = choices2[0].get("delta") or {}
+                            c = delta2.get("content")
                             if isinstance(c, str) and c:
-                                delta["content"] = f"{prefix}\n\n{c}"
+                                delta2["content"] = f"{prefix}\n\n{c}"
                                 prefix_done = True
                     out = json.dumps(obj, ensure_ascii=False)
                     out = restore_hermes_text(out)
