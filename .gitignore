@@ -31,3 +31,13 @@ test_sensenova*.json
 
 # 日志
 *.log
+
+# 调试/临时文件
+sse_raw*.txt
+test_req.json
+
+# 辅助工具（非核心）
+封面生成器.html
+商品海报生成器.html
+小红书5图生成器.html
+小红书专属封面.html
