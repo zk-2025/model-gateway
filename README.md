@@ -197,5 +197,4 @@ pyinstaller 网关客户端.spec --noconfirm
 ---
 
 ## 📄 License
-
-MIT
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
