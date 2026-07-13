@@ -147,7 +147,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8000
 
 | 文件 | 作用 | 说明 |
 |------|------|------|
-| `config.json` | 本地密钥 | 首次启动自动生成，含 `local_api_key` 和 `admin_token` |
+| `config.json` | 本地密钥 | 首次启动自动生成，含 `local_api_key` |
 | `providers.json` | 上游提供商 | 配置你的 API 渠道（名称、Base URL、API Key、模型列表） |
 | `models_meta.json` | 模型元数据 | 模型别名、上下文长度、描述 |
 | `routers.json` | 路由配置 | 自定义路由组（在面板里配置，自动生成） |
@@ -163,9 +163,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8000
 | 接口 | 凭据 |
 |------|------|
 | `/v1/chat/completions`、`/v1/models` | `Authorization: Bearer <local_api_key>` |
-| `/api/*`（管理面板） | `Authorization: Bearer <admin_token>`（也接受 local_api_key） |
-
-管理面板首次打开需输入 `admin_token`（从 `config.json` 获取）。
+| `/api/*`（管理面板） | `Authorization: Bearer <local_api_key>` |
 
 ---
 

@@ -1,0 +1,26 @@
+24: logger = logging.getLogger("gateway")
+73: if not data.get("admin_token"):
+74: data["admin_token"] = "adm-" + secrets.token_hex(16)
+79: "admin_token": "adm-" + secrets.token_hex(16),
+122: ADMIN_TOKEN = app_config.get("admin_token")
+145: """管理面板调用 /api/* 的鉴权，接受 admin_token 或 local_api_key"""
+240: logger.info("history cleanup: removed %d expired records", n)
+243: logger.info("usage cleanup: removed %d expired records", un)
+406: logger.warning("circuit opened: %s", key)
+475: logger.exception("fetch_model_details failed for %s", base_url)
+510: logger.exception("fetch_models failed for %s", base_url)
+526: logger.exception("initial model_details fetch failed: %s", p.get("name"))
+563: logger.info("poll done: %d/%d ok", ok_count, len(new_status))
+565: logger.exception("poll_all loop error")
+795: "admin_token": ADMIN_TOKEN,
+1009: logger.warning("write announcement cache file failed")
+1012: logger.warning("fetch remote announcement failed: %s", url)
+1027: logger.exception("parse announcement.json failed")
+1182: logger.warning("stream connect error to %s: %s", provider_name, e)
+1193: logger.warning("upstream stream error %d from %s", resp.status_code, provider_name)
+1262: logger.exception("append_usage(stream) failed")
+1302: logger.warning("upstream %d from %s: %s", resp.status_code, provider["name"], resp.text[:200])
+1324: logger.exception("append_usage(non-stream) failed")
+1337: logger.warning("upstream non-json from %s: %s", provider["name"], resp.text[:200])
+1342: logger.warning("forward error to %s: %s", provider["name"], e)
+1347: logger.exception("unexpected forward error to %s", provider["name"])
