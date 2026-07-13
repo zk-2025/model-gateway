@@ -43,6 +43,8 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
+APP_VERSION = "1.2.0"
+
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
 HISTORY_CLEANUP_INTERVAL = 6 * 3600
@@ -697,46 +699,87 @@ def restore_hermes_text(text: str) -> str:
     return text
 
 
+def merge_reasoning(obj: dict) -> dict:
+    """将 reasoning_content 用 <think>...</think> 包裹后合并到 content"""
+    choices = obj.get("choices")
+    if not choices or not isinstance(choices, list):
+        return obj
+    for choice in choices:
+        target = choice.get("delta") or choice.get("message")
+        if not target or not isinstance(target, dict):
+            continue
+        rc = target.pop("reasoning_content", None)
+        if rc is None:
+            continue
+        wrapped = f"<think>{rc}</think>"
+        c = target.get("content")
+        if isinstance(c, str) and c:
+            target["content"] = c + wrapped
+        else:
+            target["content"] = wrapped
+    return obj
+
 # ============================================================
-# 默认语言约束：强制简体中文回复
+# 回复语言跟随：根据用户消息语言决定回复语言
 # ============================================================
-ZH_SYSTEM_HINT = (
-    "\n\n【重要】请始终使用简体中文回答用户。"
-    "思考过程(reasoning)也请用中文。"
-    "代码、命令、文件名、专有名词、标识符等保持原样即可，不要翻译。"
-)
-ZH_HINT_MARK = "使用简体中文"
+LANG_HINTS = {
+    "zh": (
+        "\n\n【重要】请始终使用简体中文回答用户。"
+        "思考过程(reasoning)也请用中文。"
+        "代码、命令、文件名、专有名词、标识符等保持原样即可，不要翻译。"
+    ),
+    "en": (
+        "\n\n[Important] Please always respond to the user in English. "
+        "The reasoning process should also be in English. "
+        "Keep code, commands, file names, proper nouns, and identifiers as-is; do not translate them."
+    ),
+}
 
 
-def ensure_zh_reply(body: dict) -> dict:
-    """注入"默认简体中文回复"的系统提示，避免模型用英文作答。
-    - 已有 system 且为纯文本：在末尾追加中文指令（带判重，幂等）。
-    - 无 system：在最前面插入一条中文 system。
+def detect_user_lang(msgs: list) -> str:
+    """检测用户最后一条文本消息的语言，返回 'zh' 或 'en'。
+    依据：CJK 字符数与拉丁字母数的比较，谁多跟随谁；
+    两者都为 0 时继续向前找；都找不到则默认 'zh'。"""
+    for m in reversed(msgs):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, list):
+            # 多模态：拼接其中的 text 段
+            c = " ".join(
+                seg.get("text", "")
+                for seg in c
+                if isinstance(seg, dict) and seg.get("type") == "text"
+            )
+        if not isinstance(c, str):
+            continue
+        cjk = sum(1 for ch in c if "\u4e00" <= ch <= "\u9fff")
+        lat = sum(1 for ch in c if ch.isascii() and ch.isalpha())
+        if cjk == 0 and lat == 0:
+            continue
+        return "zh" if cjk >= lat else "en"
+    return "zh"
+
+
+def ensure_lang_reply(body: dict) -> dict:
+    """根据用户消息语言注入对应的回复语言提示。
+    - 已有 system 且为纯文本：在末尾追加指令（带判重，幂等）。
+    - 无 system：在最前面插入一条对应语言的 system。
     - 多模态(数组) system 不动，避免破坏结构。"""
     msgs = body.get("messages")
     if not isinstance(msgs, list) or not msgs:
         return body
+    lang = detect_user_lang(msgs)
+    hint = LANG_HINTS[lang]
     first = msgs[0]
     if isinstance(first, dict) and first.get("role") == "system":
         c = first.get("content")
-        if isinstance(c, str) and ZH_HINT_MARK not in c:
-            first["content"] = c.rstrip() + ZH_SYSTEM_HINT
+        if isinstance(c, str) and "请始终使用简体中文" not in c and "always respond to the user in English" not in c:
+            first["content"] = c.rstrip() + hint
         return body
-    msgs.insert(0, {"role": "system", "content": "请使用简体中文回答。" + ZH_SYSTEM_HINT})
+    sys_text = ("请使用简体中文回答。" + hint) if lang == "zh" else ("Please respond in English. " + hint)
+    msgs.insert(0, {"role": "system", "content": sys_text})
     return body
-
-
-def merge_reasoning(obj: dict) -> dict:
-    """把 SSE chunk 中 reasoning_content 合并进 content（兼容不支持 reasoning_content 的客户端）。
-    背景：Qwen3 / DeepSeek-R1 等推理模型会输出 reasoning_content，部分客户端不识别该字段。"""
-    for choice in obj.get("choices", []):
-        delta = choice.get("delta")
-        if not isinstance(delta, dict):
-            continue
-        rc = delta.pop("reasoning_content", None)
-        if rc:
-            delta["content"] = (delta.get("content") or "") + rc
-    return obj
 
 
 # ============================================================
@@ -749,7 +792,8 @@ async def index(request: Request):
         "index.html",
         {
             "local_api_key": LOCAL_API_KEY,
-            "admin_token": ADMIN_TOKEN
+            "admin_token": ADMIN_TOKEN,
+            "app_version": APP_VERSION,
         },
     )
 
@@ -1207,7 +1251,7 @@ async def _try_stream_forward(url, body, headers, key, provider_name, model):
 async def proxy_chat(request: Request, force: bool = False):
     body = await request.json()
     body = compress_hermes(body)
-    body = ensure_zh_reply(body)
+    body = ensure_lang_reply(body)
     requested_model = body.get("model")
 
     candidates = pick_available_models(requested_model, force=force)
@@ -1220,13 +1264,6 @@ async def proxy_chat(request: Request, force: bool = False):
     for provider, model in candidates:
         k = f"{provider['name']}||{model}"
         req_body = json.loads(json.dumps(body))
-        if requested_model == "auto-router-1m":
-            for msg in req_body.get("messages", []):
-                if isinstance(msg.get("content"), str):
-                    msg["content"] = msg["content"].replace(
-                        "auto-router-1m",
-                        f"{model} (真实提供商: {provider['name']})",
-                    )
         req_body["model"] = MODEL_ALIASES.get(model, model)
         url = provider["base_url"].rstrip("/") + "/chat/completions"
         headers = {
@@ -1251,6 +1288,7 @@ async def proxy_chat(request: Request, force: bool = False):
                 continue
             try:
                 parsed = json.loads(resp.text)
+                parsed = merge_reasoning(parsed)
                 parsed_str = json.dumps(parsed, ensure_ascii=False)
                 parsed_str = restore_hermes_text(parsed_str)
                 parsed = json.loads(parsed_str)
@@ -1339,6 +1377,19 @@ if __name__ == "__main__":
     import time
     from PIL import Image, ImageDraw
     import pystray
+    import msvcrt
+
+    # ---- 单实例限制：防止重复启动 ----
+    LOCK_FILE = str(DATA_DIR / ".gateway.lock")
+    try:
+        _lock_fd = open(LOCK_FILE, "w")
+        msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+    except (OSError, IOError):
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0, "网关客户端已在运行中，请勿重复启动。", "提示", 0x30
+        )
+        sys.exit(0)
 
     # ---- 生成托盘图标（纯几何图形，不依赖外部图片文件） ----
     def create_tray_icon():

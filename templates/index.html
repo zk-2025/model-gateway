@@ -546,7 +546,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="mac-content">
     <div class="header-actions">
       <div style="display: flex; align-items: center; gap: 24px;">
-        <h1 style="margin: 0;">无限额度监控面板</h1>
+        <h1 style="margin: 0;">无限额度监控面板 <span style="font-size: 12px; font-weight: 500; color: var(--text-secondary); background: var(--mac-border); padding: 2px 8px; border-radius: 6px; vertical-align: middle; margin-left: 4px;">v{{ app_version }}</span></h1>
         <div class="main-tabs" style="display: flex; gap: 6px; background: rgba(0,0,0,0.04); padding: 4px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.05);">
           <button id="tab-monitor" class="btn" onclick="switchMainTab('monitor')" style="border: none; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); background: var(--mac-window-bg); color: var(--text-primary);">实时监控</button>
           <button id="tab-usage" class="btn" onclick="switchMainTab('usage')" style="border: none; font-weight: 500; box-shadow: none; background: transparent; color: var(--text-secondary);">消耗统计</button>

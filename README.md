@@ -183,7 +183,7 @@ pytest tests/ -v
 pip install pyinstaller
 pyinstaller 网关客户端.spec --noconfirm
 ```
-生成的 exe 在 `dist/` 目录。`网关客户端.spec` 为无控制台桌面窗口版，`网关启动器.spec` 为带控制台版。
+生成的 exe 在 `dist/` 目录，文件名 `网关客户端.exe`（无控制台桌面窗口版，双击即用）。
 
 ---
 
