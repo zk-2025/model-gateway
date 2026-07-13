@@ -43,7 +43,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -69,14 +69,9 @@ def atomic_write(path: Path, content: str):
 # ============================================================
 def load_config():
     if CONFIG_FILE.exists():
-        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        if not data.get("admin_token"):
-            data["admin_token"] = "adm-" + secrets.token_hex(16)
-            atomic_write(CONFIG_FILE, json.dumps(data, indent=2))
-        return data
+        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     data = {
         "local_api_key": "sk-local-" + secrets.token_hex(16),
-        "admin_token": "adm-" + secrets.token_hex(16),
     }
     atomic_write(CONFIG_FILE, json.dumps(data, indent=2))
     return data
@@ -119,7 +114,6 @@ def save_routers():
 app_config = load_config()
 LOCAL_API_KEY = app_config.get("local_api_key")
 ROUTERS = load_routers()
-ADMIN_TOKEN = app_config.get("admin_token")
 
 meta = load_meta()
 MODEL_ALIASES = meta.get("aliases", {})
@@ -142,11 +136,11 @@ def verify_client(credentials: HTTPAuthorizationCredentials = Depends(security))
 
 
 def verify_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """管理面板调用 /api/* 的鉴权，接受 admin_token 或 local_api_key"""
+    """管理面板调用 /api/* 的鉴权，直接使用 local_api_key"""
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing credentials")
-    if credentials.credentials not in (ADMIN_TOKEN, LOCAL_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing admin token")
+    if credentials.credentials != LOCAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials
 
 
@@ -792,7 +786,6 @@ async def index(request: Request):
         "index.html",
         {
             "local_api_key": LOCAL_API_KEY,
-            "admin_token": ADMIN_TOKEN,
             "app_version": APP_VERSION,
         },
     )
