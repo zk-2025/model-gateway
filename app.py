@@ -43,7 +43,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -687,10 +687,8 @@ def restore_hermes_text(text: str) -> str:
 
 
 def merge_reasoning(obj: dict) -> dict:
-    """将 reasoning_content 用 <think>...</think> 包裹后合并到 content"""
-    choices = obj.get("choices")
-    if not choices or not isinstance(choices, list):
-        return obj
+    """保留 reasoning_content 字段原样透传，不合并到 content"""
+    return obj
     for choice in choices:
         target = choice.get("delta") or choice.get("message")
         if not target or not isinstance(target, dict):
@@ -1167,7 +1165,6 @@ async def _stream_with_failover(candidates, body, is_router):
                     record_fail(k)
                     continue
 
-                reasoning_open = False
                 usage_obj = None
                 stream_ok = True
 
@@ -1180,9 +1177,6 @@ async def _stream_with_failover(candidates, body, is_router):
                             continue
                         data_str = line[6:]
                         if data_str.strip() == "[DONE]":
-                            if reasoning_open:
-                                yield "data: " + json.dumps({"choices": [{"delta": {"content": "```"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
-                                reasoning_open = False
                             yield "data: [DONE]\n\n"
                             break
                         try:
@@ -1194,20 +1188,12 @@ async def _stream_with_failover(candidates, body, is_router):
                             choices = obj.get("choices") or []
                             if choices:
                                 delta = choices[0].get("delta") or {}
-                                rc = delta.pop("reasoning_content", None)
-                                if rc is not None:
-                                    if not reasoning_open:
-                                        reasoning_open = True
-                                        rc = "```" + rc
-                                    delta["content"] = rc
-                                elif reasoning_open and delta.get("content") is not None:
-                                    reasoning_open = False
-                                    delta["content"] = "```" + (delta["content"] or "")
-                                elif reasoning_open and delta.get("content") is None:
-                                    pass
                                 c = delta.get("content")
                                 if isinstance(c, str):
                                     accumulated += c
+                                rc = delta.get("reasoning_content")
+                                if isinstance(rc, str):
+                                    accumulated += rc
                             if not prefix_done:
                                 choices2 = obj.get("choices") or []
                                 if choices2:
@@ -1241,8 +1227,6 @@ async def _stream_with_failover(candidates, body, is_router):
                         await resp.aclose()
                     except Exception:
                         pass
-                    if reasoning_open:
-                        yield "data: " + json.dumps({"choices": [{"delta": {"content": "```"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
                     continue
                 finally:
                     if stream_ok:

@@ -102,7 +102,7 @@
 
 ### 方式一：桌面版（推荐普通用户）
 
-1. 下载 `网关客户端.exe`（见 [Releases](https://github.com/zk-2025/model-gateway/releases)）
+1. 下载 `网关客户端.exe`：可在 [Releases](https://github.com/zk-2025/model-gateway/releases) 或仓库 `dist/` 目录（Git LFS 管理）获取
 2. 双击运行 → 首次显示免责声明 → 点"我已阅读并同意"
 3. 自动打开程序窗口，首次会自动生成配置
 4. 在"上游提供商"里点"+ 添加提供商"，填入你的 API 信息

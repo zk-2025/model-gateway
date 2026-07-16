@@ -86,19 +86,20 @@ def test_mask_key_empty():
 
 
 # ============================================================
-# merge_reasoning
+# merge_reasoning (透传，不合并)
 # ============================================================
-def test_merge_reasoning_combines_content():
+def test_merge_reasoning_preserves_both():
     obj = {"choices": [{"delta": {"reasoning_content": "think", "content": "hi"}}]}
     out = app_module.merge_reasoning(obj)
-    assert out["choices"][0]["delta"]["content"] == "hi<think>think</think>"
-    assert "reasoning_content" not in out["choices"][0]["delta"]
+    assert out["choices"][0]["delta"]["content"] == "hi"
+    assert out["choices"][0]["delta"]["reasoning_content"] == "think"
 
 
-def test_merge_reasoning_no_content_field():
+def test_merge_reasoning_only_reasoning():
     obj = {"choices": [{"delta": {"reasoning_content": "think"}}]}
     out = app_module.merge_reasoning(obj)
-    assert out["choices"][0]["delta"]["content"] == "<think>think</think>"
+    assert out["choices"][0]["delta"]["reasoning_content"] == "think"
+    assert "content" not in out["choices"][0]["delta"]
 
 
 def test_merge_reasoning_no_reasoning():
@@ -110,8 +111,8 @@ def test_merge_reasoning_no_reasoning():
 def test_merge_reasoning_message_key():
     obj = {"choices": [{"message": {"reasoning_content": "think", "content": "hi"}}]}
     out = app_module.merge_reasoning(obj)
-    assert out["choices"][0]["message"]["content"] == "hi<think>think</think>"
-    assert "reasoning_content" not in out["choices"][0]["message"]
+    assert out["choices"][0]["message"]["content"] == "hi"
+    assert out["choices"][0]["message"]["reasoning_content"] == "think"
 
 
 def test_merge_reasoning_no_choices():
