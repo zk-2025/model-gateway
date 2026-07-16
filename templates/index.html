@@ -634,7 +634,7 @@ input:checked + .slider:before { transform: translateX(14px); }
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; margin-top: 8px;">
       <h2 style="font-size: 16px; font-weight: 600;">消耗统计</h2>
       <div style="display: flex; gap: 8px;">
-        <button class="btn btn-primary usage-tab" data-days="1" onclick="switchUsageTab(1)">今日</button>
+        <button class="btn btn-primary usage-tab" data-days="1" onclick="switchUsageTab(1)">近24小时</button>
         <button class="btn usage-tab" data-days="7" onclick="switchUsageTab(7)">近 7 天</button>
         <button class="btn usage-tab" data-days="30" onclick="switchUsageTab(30)">近 30 天</button>
       </div>
@@ -677,10 +677,10 @@ input:checked + .slider:before { transform: translateX(14px); }
       <p>展示所有上游模型健康状态、SLA 可用率、平均/极速/最慢延迟、探针次数。模型名旁的状态点代表<b>上次轮询</b>结果：🟢 绿色=正常 / 🔴 红色=异常（限流或报错）/ ⚪ 灰色=尚未巡检。后台每 5 分钟自动巡检，也可点右上角"立即检测"手动触发。</p>
 
       <p><b>📏 上下文长度</b></p>
-      <p>直接点击监控表格"上下文窗口"列的数字即可修改，回车保存。≥ 1048576 (1M) 的模型会自动纳入 <code>auto-router-1m</code> 路由候选。</p>
+      <p>直接点击监控表格"上下文窗口"列的数字即可修改，回车保存。</p>
 
       <p><b>🔀 路由配置</b></p>
-      <p>创建自定义路由组并勾选成员模型，客户端 <code>model</code> 字段填路由组名即命中（如 <code>1m</code>、<code>256k</code>），网关在组内按可用率/延迟择优。内置 <code>auto-router-1m</code> 自动聚合所有 1M 上下文模型。</p>
+      <p>创建自定义路由组并勾选成员模型，客户端 <code>model</code> 字段填路由组名即命中（如 <code>1m</code>、<code>256k</code>），网关在组内按可用率/延迟加权择优。</p>
 
       <p><b>⚙️ 模型管理</b></p>
       <p>每个提供商卡片支持：编辑连接信息、勾选启用的模型、删除。添加提供商时自动拉取上游可用模型列表。</p>
@@ -689,10 +689,10 @@ input:checked + .slider:before { transform: translateX(14px); }
       <p>查看本网关对外暴露的所有模型 ID（格式 <code>提供商名-模型名</code>），可一键复制。</p>
 
       <p><b>📈 消耗统计</b></p>
-      <p>按今日 / 7 天 / 30 天统计请求数、输入/输出/合计 Token，按"渠道·模型"维度明细展示。</p>
+      <p>按近24小时 / 7 天 / 30 天统计请求数、输入/输出/合计 Token，按"渠道·模型"维度明细展示。</p>
 
       <p><b>🛡️ 智能容灾</b></p>
-      <p>熔断机制：某模型连续失败 3 次熔断 60 秒，期间自动跳过。请求转发时按质量分（可用率+延迟）排序候选，逐个尝试直到成功。</p>
+      <p>熔断机制：某模型连续失败 3 次熔断 60 秒，恢复后自动重置。路由组按质量分+延迟加权排序候选。流式中断时自动切换下一个候选模型继续输出，用户无感。</p>
       
       <hr style="border: 0; border-top: 1px solid var(--mac-border); margin: 20px 0;">
       <h3 style="margin-top:0;">👨‍💻 关于作者</h3>

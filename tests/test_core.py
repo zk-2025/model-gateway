@@ -163,7 +163,7 @@ def test_pick_respects_health(monkeypatch):
 
 
 def test_pick_explicit_model_without_prefix_bypasses_health(monkeypatch):
-    # 显式指定裸模型名，仍受健康检查约束
+    # 显式指定裸模型名，跳过健康检查，直接透传给上游
     monkeypatch.setattr(app_module, "providers", [
         provider(name="NVIDIA", models=["a", "b"])
     ])
@@ -172,7 +172,8 @@ def test_pick_explicit_model_without_prefix_bypasses_health(monkeypatch):
         "NVIDIA||b": {"status": "fail"},
     })
     cands = app_module.pick_available_models("b")
-    assert cands == []  # b 失败，不放行
+    models = [m for _, m in cands]
+    assert "b" in models  # 显式指定时不过滤，直接透传
 
 
 def test_pick_force_bypasses_health(monkeypatch):

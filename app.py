@@ -43,7 +43,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -350,29 +350,24 @@ def mask_key(key: str) -> str:
 def update_model_quality(key: str, info: dict):
     q = model_quality.get(key)
     if q is None:
-        q = {"ok": 0, "fail": 0, "error": 0, "latencies": deque(maxlen=QUALITY_WINDOW)}
+        q = {"status_window": deque(maxlen=QUALITY_WINDOW), "latencies": deque(maxlen=QUALITY_WINDOW)}
         model_quality[key] = q
     st = info.get("status", "unknown")
+    if st in ("ok", "fail", "error"):
+        q["status_window"].append(st)
     if st == "ok":
-        q["ok"] += 1
         lat = info.get("latency_ms")
         if lat:
             q["latencies"].append(lat)
-    elif st == "fail":
-        q["fail"] += 1
-    elif st == "error":
-        q["error"] += 1
 
 
 def get_quality_score(key: str) -> float:
     """0~1 可用率，无数据返回 1.0（乐观）"""
     q = model_quality.get(key)
-    if not q:
+    if not q or not q["status_window"]:
         return 1.0
-    total = q["ok"] + q["fail"] + q["error"]
-    if total == 0:
-        return 1.0
-    return q["ok"] / total
+    ok_count = sum(1 for s in q["status_window"] if s == "ok")
+    return ok_count / len(q["status_window"])
 
 
 def get_avg_latency(key: str):
@@ -389,7 +384,11 @@ def is_circuit_open(key: str) -> bool:
     cb = circuit_breaker.get(key)
     if not cb:
         return False
-    return bool(cb.get("open_until")) and time.time() < cb["open_until"]
+    if cb.get("open_until") and time.time() >= cb["open_until"]:
+        cb["fails"] = 0
+        cb["open_until"] = 0
+        return False
+    return bool(cb.get("open_until"))
 
 
 def record_fail(key: str):
@@ -626,19 +625,13 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
             for m in get_enabled_models(p):
                 if m in target_models:
                     k = f"{p['name']}||{m}"
-                    if force:
-                        raw.append((p, m, k))
-                        continue
-                    st = health_status.get(k, {}).get("status")
-                    if not is_circuit_open(k) and st in ("ok", None, "unknown"):
-                        raw.append((p, m, k))
-                    else:
-                        unhealthy_raw.append((p, m, k))
-        if not raw:
-            raw = unhealthy_raw
-        import random
-        random.shuffle(raw)
-        return [(p, m) for p, m, _ in raw]
+                    raw.append((p, m, k))
+        scored = [
+            (get_quality_score(k), 1.0 / (get_avg_latency(k) or 1e9), p, m, k)
+            for p, m, k in raw
+        ]
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        return [(p, m) for _, _, p, m, _ in scored]
         
     # 3. 如果请求的是具体模型
     for p in providers:
@@ -647,7 +640,7 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
             if model and model != m and model != prefixed:
                 continue
             k = f"{p['name']}||{m}"
-            if force:
+            if force or model:
                 raw.append((p, m, k))
                 continue
             st = health_status.get(k, {}).get("status")
@@ -716,63 +709,27 @@ def merge_reasoning(obj: dict) -> dict:
 # ============================================================
 # 回复语言跟随：根据用户消息语言决定回复语言
 # ============================================================
-LANG_HINTS = {
-    "zh": (
-        "\n\n【重要】请始终使用简体中文回答用户。"
-        "思考过程(reasoning)也请用中文。"
-        "代码、命令、文件名、专有名词、标识符等保持原样即可，不要翻译。"
-    ),
-    "en": (
-        "\n\n[Important] Please always respond to the user in English. "
-        "The reasoning process should also be in English. "
-        "Keep code, commands, file names, proper nouns, and identifiers as-is; do not translate them."
-    ),
-}
-
-
-def detect_user_lang(msgs: list) -> str:
-    """检测用户最后一条文本消息的语言，返回 'zh' 或 'en'。
-    依据：CJK 字符数与拉丁字母数的比较，谁多跟随谁；
-    两者都为 0 时继续向前找；都找不到则默认 'zh'。"""
-    for m in reversed(msgs):
-        if not isinstance(m, dict) or m.get("role") != "user":
-            continue
-        c = m.get("content")
-        if isinstance(c, list):
-            # 多模态：拼接其中的 text 段
-            c = " ".join(
-                seg.get("text", "")
-                for seg in c
-                if isinstance(seg, dict) and seg.get("type") == "text"
-            )
-        if not isinstance(c, str):
-            continue
-        cjk = sum(1 for ch in c if "\u4e00" <= ch <= "\u9fff")
-        lat = sum(1 for ch in c if ch.isascii() and ch.isalpha())
-        if cjk == 0 and lat == 0:
-            continue
-        return "zh" if cjk >= lat else "en"
-    return "zh"
+LANG_HINT = (
+    "\n\n【重要】请始终使用简体中文回答用户。"
+    "思考过程(reasoning)也请用中文。"
+    "代码、命令、文件名、专有名词、标识符等保持原样即可，不要翻译。"
+)
 
 
 def ensure_lang_reply(body: dict) -> dict:
-    """根据用户消息语言注入对应的回复语言提示。
+    """注入简体中文回复提示。
     - 已有 system 且为纯文本：在末尾追加指令（带判重，幂等）。
-    - 无 system：在最前面插入一条对应语言的 system。
-    - 多模态(数组) system 不动，避免破坏结构。"""
+    - 无 system：在最前面插入一条 system。"""
     msgs = body.get("messages")
     if not isinstance(msgs, list) or not msgs:
         return body
-    lang = detect_user_lang(msgs)
-    hint = LANG_HINTS[lang]
     first = msgs[0]
     if isinstance(first, dict) and first.get("role") == "system":
         c = first.get("content")
-        if isinstance(c, str) and "请始终使用简体中文" not in c and "always respond to the user in English" not in c:
-            first["content"] = c.rstrip() + hint
+        if isinstance(c, str) and "请始终使用简体中文" not in c:
+            first["content"] = c.rstrip() + LANG_HINT
         return body
-    sys_text = ("请使用简体中文回答。" + hint) if lang == "zh" else ("Please respond in English. " + hint)
-    msgs.insert(0, {"role": "system", "content": sys_text})
+    msgs.insert(0, {"role": "system", "content": "请使用简体中文回答。" + LANG_HINT})
     return body
 
 
@@ -1166,95 +1123,138 @@ async def check_all(_=Depends(verify_admin)):
 # ============================================================
 # 代理（客户端鉴权）
 # ============================================================
-async def _try_stream_forward(url, body, headers, key, provider_name, model):
-    """尝试建立流式上游连接。成功返回 (StreamingResponse, None)，失败返回 (None, error)"""
-    req = http_client.build_request("POST", url, json=body, headers=headers)
-    try:
-        resp = await http_client.send(req, stream=True)
-    except httpx.RequestError as e:
-        logger.warning("stream connect error to %s: %s", provider_name, e)
-        record_fail(key)
-        return None, str(e)
-
-    if resp.status_code != 200:
-        try:
-            err_bytes = await resp.aread()
-            err_msg = err_bytes.decode("utf-8", errors="ignore")
-        except Exception:
-            err_msg = ""
-        await resp.aclose()
-        logger.warning("upstream stream error %d from %s", resp.status_code, provider_name)
-        record_fail(key)
-        return None, f"upstream {resp.status_code}"
-
-    record_success(key)
+async def _stream_with_failover(candidates, body, is_router):
+    """流式转发，中断时自动切换下一个候选模型继续输出"""
 
     async def gen():
-        prefix = f"🤖 {provider_name} · {model}"
+        accumulated = ""
         prefix_done = False
-        reasoning_open = False
-        usage_obj = None
-        try:
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                if not line.startswith("data: "):
-                    yield line + "\n"
-                    continue
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    if reasoning_open:
-                        yield "data: " + json.dumps({"choices": [{"delta": {"content": "</think>"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
-                        reasoning_open = False
-                    yield "data: [DONE]\n\n"
-                    break
-                try:
-                    obj = json.loads(data_str)
-                    if obj.get("usage"):
-                        usage_obj = obj["usage"]
-                    if "model" in obj and isinstance(obj["model"], str):
-                        obj["model"] = f"{provider_name} · {model}"
-                    choices = obj.get("choices") or []
-                    if choices:
-                        delta = choices[0].get("delta") or {}
-                        rc = delta.pop("reasoning_content", None)
-                        if rc is not None:
-                            if not reasoning_open:
-                                reasoning_open = True
-                                rc = "<think>" + rc
-                            delta["content"] = rc
-                        elif reasoning_open and delta.get("content") is not None:
-                            reasoning_open = False
-                            delta["content"] = "</think>" + (delta["content"] or "")
-                        elif reasoning_open and delta.get("content") is None:
-                            pass
-                    if not prefix_done:
-                        choices2 = obj.get("choices") or []
-                        if choices2:
-                            delta2 = choices2[0].get("delta") or {}
-                            c = delta2.get("content")
-                            if isinstance(c, str) and c:
-                                delta2["content"] = f"{prefix}\n\n{c}"
-                                prefix_done = True
-                    out = json.dumps(obj, ensure_ascii=False)
-                    out = restore_hermes_text(out)
-                    yield "data: " + out + "\n\n"
-                except json.JSONDecodeError:
-                    yield line + "\n"
-        finally:
-            await resp.aclose()
-            try:
-                pt = (usage_obj or {}).get("prompt_tokens", 0) or 0
-                ct = (usage_obj or {}).get("completion_tokens", 0) or 0
-                await append_usage({
-                    "ts": time.time(), "model": model,
-                    "provider": provider_name,
-                    "pt": pt, "ct": ct, "tt": pt + ct,
-                })
-            except Exception:
-                logger.exception("append_usage(stream) failed")
+        max_attempts = 2 if is_router else 1
 
-    return StreamingResponse(gen(), media_type="text/event-stream"), None
+        for attempt in range(max_attempts):
+            for provider, model in candidates:
+                k = f"{provider['name']}||{model}"
+                req_body = json.loads(json.dumps(body))
+                req_body["model"] = MODEL_ALIASES.get(model, model)
+
+                if accumulated:
+                    msgs = list(req_body.get("messages", []))
+                    msgs.append({"role": "assistant", "content": accumulated})
+                    msgs.append({"role": "user", "content": "请继续上面的回复，从中断处接着写。"})
+                    req_body["messages"] = msgs
+
+                url = provider["base_url"].rstrip("/") + "/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {provider['api_key']}",
+                    "Content-Type": "application/json",
+                }
+
+                req = http_client.build_request("POST", url, json=req_body, headers=headers)
+                try:
+                    resp = await http_client.send(req, stream=True)
+                except httpx.RequestError as e:
+                    logger.warning("stream connect error to %s: %s", provider["name"], e)
+                    record_fail(k)
+                    continue
+
+                if resp.status_code != 200:
+                    try:
+                        await resp.aread()
+                    except Exception:
+                        pass
+                    await resp.aclose()
+                    logger.warning("upstream stream error %d from %s", resp.status_code, provider["name"])
+                    record_fail(k)
+                    continue
+
+                reasoning_open = False
+                usage_obj = None
+                stream_ok = True
+
+                try:
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        if not line.startswith("data: "):
+                            yield line + "\n"
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            if reasoning_open:
+                                yield "data: " + json.dumps({"choices": [{"delta": {"content": "```"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
+                                reasoning_open = False
+                            yield "data: [DONE]\n\n"
+                            break
+                        try:
+                            obj = json.loads(data_str)
+                            if obj.get("usage"):
+                                usage_obj = obj["usage"]
+                            if "model" in obj and isinstance(obj["model"], str):
+                                obj["model"] = f"{provider['name']} · {model}"
+                            choices = obj.get("choices") or []
+                            if choices:
+                                delta = choices[0].get("delta") or {}
+                                rc = delta.pop("reasoning_content", None)
+                                if rc is not None:
+                                    if not reasoning_open:
+                                        reasoning_open = True
+                                        rc = "```" + rc
+                                    delta["content"] = rc
+                                elif reasoning_open and delta.get("content") is not None:
+                                    reasoning_open = False
+                                    delta["content"] = "```" + (delta["content"] or "")
+                                elif reasoning_open and delta.get("content") is None:
+                                    pass
+                                c = delta.get("content")
+                                if isinstance(c, str):
+                                    accumulated += c
+                            if not prefix_done:
+                                choices2 = obj.get("choices") or []
+                                if choices2:
+                                    delta2 = choices2[0].get("delta") or {}
+                                    c2 = delta2.get("content")
+                                    if isinstance(c2, str) and c2:
+                                        delta2["content"] = f"🤖 {provider['name']} · {model}\n\n{c2}"
+                                        prefix_done = True
+                            out = json.dumps(obj, ensure_ascii=False)
+                            out = restore_hermes_text(out)
+                            yield "data: " + out + "\n\n"
+                        except json.JSONDecodeError:
+                            yield line + "\n"
+                    record_success(k)
+                    try:
+                        pt = (usage_obj or {}).get("prompt_tokens", 0) or 0
+                        ct = (usage_obj or {}).get("completion_tokens", 0) or 0
+                        await append_usage({
+                            "ts": time.time(), "model": model,
+                            "provider": provider["name"],
+                            "pt": pt, "ct": ct, "tt": pt + ct,
+                        })
+                    except Exception:
+                        logger.exception("append_usage(stream) failed")
+                    return
+                except Exception:
+                    stream_ok = False
+                    logger.exception("stream interrupted from %s, switching", provider["name"])
+                    record_fail(k)
+                    try:
+                        await resp.aclose()
+                    except Exception:
+                        pass
+                    if reasoning_open:
+                        yield "data: " + json.dumps({"choices": [{"delta": {"content": "```"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
+                    continue
+                finally:
+                    if stream_ok:
+                        try:
+                            await resp.aclose()
+                        except Exception:
+                            pass
+
+        yield "data: " + json.dumps({"choices": [{"delta": {"content": "\n\n⚠️ 所有模型均失败，回复中断。"}, "index": 0}]}, ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.api_route("/v1/chat/completions", methods=["POST"], dependencies=[Depends(verify_client)])
@@ -1268,79 +1268,76 @@ async def proxy_chat(request: Request, force: bool = False):
     if not candidates:
         raise HTTPException(503, f"无可用的模型: {requested_model or '任意'}")
 
+    is_router = requested_model in ROUTERS
     stream = body.get("stream", False)
     last_err = None
 
-    for provider, model in candidates:
-        k = f"{provider['name']}||{model}"
-        req_body = json.loads(json.dumps(body))
-        req_body["model"] = MODEL_ALIASES.get(model, model)
-        url = provider["base_url"].rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {provider['api_key']}",
-            "Content-Type": "application/json",
-        }
+    if stream:
+        return await _stream_with_failover(candidates, body, is_router)
 
-        if stream:
-            resp, err = await _try_stream_forward(url, req_body, headers, k, provider["name"], model)
-            if resp is not None:
-                return resp
-            last_err = err
-            continue
+    for attempt in (2,) if is_router else (1,):
+        for provider, model in candidates:
+            k = f"{provider['name']}||{model}"
+            req_body = json.loads(json.dumps(body))
+            req_body["model"] = MODEL_ALIASES.get(model, model)
+            url = provider["base_url"].rstrip("/") + "/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {provider['api_key']}",
+                "Content-Type": "application/json",
+            }
 
-        try:
-            resp = await http_client.post(url, json=req_body, headers=headers, timeout=120)
-            # 非 2xx（429 限流 / 5xx 等）视为失败，fallback 到下一候选
-            if resp.status_code >= 400:
-                logger.warning("upstream %d from %s: %s", resp.status_code, provider["name"], resp.text[:200])
-                record_fail(k)
-                last_err = f"upstream {resp.status_code}"
-                continue
             try:
-                parsed = json.loads(resp.text)
-                parsed = merge_reasoning(parsed)
-                parsed_str = json.dumps(parsed, ensure_ascii=False)
-                parsed_str = restore_hermes_text(parsed_str)
-                parsed = json.loads(parsed_str)
-                record_success(k)
-                parsed["model"] = f"{provider['name']} · {model}"
+                resp = await http_client.post(url, json=req_body, headers=headers, timeout=120)
+                if resp.status_code >= 400:
+                    logger.warning("upstream %d from %s: %s", resp.status_code, provider["name"], resp.text[:200])
+                    record_fail(k)
+                    last_err = f"upstream {resp.status_code}"
+                    continue
                 try:
-                    u = parsed.get("usage") or {}
-                    pt = u.get("prompt_tokens", 0) or 0
-                    ct = u.get("completion_tokens", 0) or 0
-                    await append_usage({
-                        "ts": time.time(), "model": model,
-                        "provider": provider["name"],
-                        "pt": pt, "ct": ct, "tt": pt + ct,
-                    })
-                except Exception:
-                    logger.exception("append_usage(non-stream) failed")
-                try:
-                    msg = parsed["choices"][0]["message"]
-                    c = msg.get("content")
-                    prefix = f"🤖 {provider['name']} · {model}"
-                    if isinstance(c, str) and c:
-                        msg["content"] = f"{prefix}\n\n{c}"
-                    elif isinstance(c, str):
-                        msg["content"] = prefix
-                except (KeyError, IndexError, TypeError):
-                    pass
-                return JSONResponse(content=parsed, status_code=resp.status_code)
-            except json.JSONDecodeError:
-                logger.warning("upstream non-json from %s: %s", provider["name"], resp.text[:200])
+                    parsed = json.loads(resp.text)
+                    parsed = merge_reasoning(parsed)
+                    parsed_str = json.dumps(parsed, ensure_ascii=False)
+                    parsed_str = restore_hermes_text(parsed_str)
+                    parsed = json.loads(parsed_str)
+                    record_success(k)
+                    parsed["model"] = f"{provider['name']} · {model}"
+                    try:
+                        u = parsed.get("usage") or {}
+                        pt = u.get("prompt_tokens", 0) or 0
+                        ct = u.get("completion_tokens", 0) or 0
+                        await append_usage({
+                            "ts": time.time(), "model": model,
+                            "provider": provider["name"],
+                            "pt": pt, "ct": ct, "tt": pt + ct,
+                        })
+                    except Exception:
+                        logger.exception("append_usage(non-stream) failed")
+                    try:
+                        msg = parsed["choices"][0]["message"]
+                        c = msg.get("content")
+                        prefix = f"🤖 {provider['name']} · {model}"
+                        if isinstance(c, str) and c:
+                            msg["content"] = f"{prefix}\n\n{c}"
+                        elif isinstance(c, str):
+                            msg["content"] = prefix
+                    except (KeyError, IndexError, TypeError):
+                        pass
+                    return JSONResponse(content=parsed, status_code=resp.status_code)
+                except json.JSONDecodeError:
+                    logger.warning("upstream non-json from %s: %s", provider["name"], resp.text[:200])
+                    record_fail(k)
+                    last_err = f"upstream non-json ({resp.status_code})"
+                    continue
+            except httpx.RequestError as e:
+                logger.warning("forward error to %s: %s", provider["name"], e)
                 record_fail(k)
-                last_err = f"upstream non-json ({resp.status_code})"
+                last_err = str(e)
                 continue
-        except httpx.RequestError as e:
-            logger.warning("forward error to %s: %s", provider["name"], e)
-            record_fail(k)
-            last_err = str(e)
-            continue
-        except Exception as e:
-            logger.exception("unexpected forward error to %s", provider["name"])
-            record_fail(k)
-            last_err = str(e)
-            continue
+            except Exception as e:
+                logger.exception("unexpected forward error to %s", provider["name"])
+                record_fail(k)
+                last_err = str(e)
+                continue
 
     raise HTTPException(502, f"所有候选模型均失败: {last_err}")
 
