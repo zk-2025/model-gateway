@@ -1,1 +1,1 @@
-dist/v1.4.1-网关客户端.exe filter=lfs diff=lfs merge=lfs -text
+dist/v*-网关客户端.exe filter=lfs diff=lfs merge=lfs -text

@@ -501,9 +501,47 @@ input:checked + .slider:before { transform: translateX(14px); }
 #announcementBody a:hover { text-decoration: underline; }
 #announcementBody code { background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
 [data-theme="dark"] #announcementBody code { background: rgba(255,255,255,0.1); }
+#announcementBody pre {
+  background: rgba(0,0,0,0.05);
+  border: 1px solid var(--mac-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 10px 0;
+  overflow-x: auto;
+}
+#announcementBody pre code { background: transparent; padding: 0; font-size: 13px; }
+[data-theme="dark"] #announcementBody pre { background: rgba(255,255,255,0.07); }
 #announcementBody blockquote { border-left: 3px solid var(--accent-primary); padding-left: 12px; margin: 8px 0; color: var(--text-secondary); }
 #announcementBody img { max-width: 100%; border-radius: 8px; }
 #announcementBody hr { border: 0; border-top: 1px solid var(--mac-border); margin: 16px 0; }
+#announcementBody table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+  border: 1px solid var(--mac-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+#announcementBody th, #announcementBody td {
+  border-bottom: 1px solid var(--mac-border);
+  border-right: 1px solid var(--mac-border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+#announcementBody th:last-child, #announcementBody td:last-child { border-right: none; }
+#announcementBody tbody tr:last-child th, #announcementBody tbody tr:last-child td { border-bottom: none; }
+#announcementBody th {
+  background: rgba(0,0,0,0.04);
+  font-weight: 600;
+  border-bottom-width: 2px;
+}
+[data-theme="dark"] #announcementBody th { background: rgba(255,255,255,0.06); }
+#announcementBody tr:nth-child(even) { background: rgba(0,0,0,0.02); }
+[data-theme="dark"] #announcementBody tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+#announcementBody tr:hover { background: rgba(0,122,255,0.05); }
+#announcementBody p:has(+ table), #announcementBody p:has(+ ul), #announcementBody p:has(+ ol) { margin-bottom: 4px; }
 
 </style>
 </head>
@@ -1556,36 +1594,91 @@ async function saveRouters() {
 /* ============ 系统公告 ============ */
 function renderMarkdown(md) {
   if (!md || !md.trim()) return '<div class="empty">暂无公告</div>';
+
   let html = md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  html = html.replace(/```([\s\S]*?)```/g, (m, c) => '<pre><code>' + c.replace(/^\n/, '') + '</code></pre>');
+
+  const codeBlocks = [];
+  html = html.replace(/```([\s\S]*?)```/g, (m, c) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push('<pre><code>' + c.replace(/^\n/, '').replace(/\n$/, '') + '</code></pre>');
+    return '\x00CODEBLOCK' + idx + '\x00';
+  });
+
+  const inlineCodes = [];
+  html = html.replace(/`([^`]+)`/g, (m, c) => {
+    const idx = inlineCodes.length;
+    inlineCodes.push('<code>' + c + '</code>');
+    return '\x00INLINECODE' + idx + '\x00';
+  });
+
   html = html.replace(/^#### (.*)$/gm, '<h4>$1</h4>');
   html = html.replace(/^### (.*)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.*)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
   html = html.replace(/^---$/gm, '<hr>');
   html = html.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
+
+  // Tables
   const lines = html.split('\n');
-  let out = '', inList = false;
-  for (let line of lines) {
-    if (/^- /.test(line)) {
-      if (!inList) { out += '<ul>'; inList = true; }
-      out += '<li>' + line.slice(2) + '</li>';
+  let out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (/^\|.+\|$/.test(line)) {
+      let rows = [];
+      rows.push(line);
+      i++;
+      while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+        rows.push(lines[i].trim());
+        i++;
+      }
+      if (rows.length >= 2 && /^\|(\s*[-:]+[\s-|:]*\|)+$/.test(rows[1])) {
+        const headerCells = rows[0].split('|').slice(1, -1).map(c => c.trim());
+        const bodyRows = rows.slice(2).map(row => {
+          return '<tr>' + row.split('|').slice(1, -1).map(c => '<td>' + c.trim() + '</td>').join('') + '</tr>';
+        });
+        const headerHtml = '<thead><tr>' + headerCells.map(c => '<th>' + c + '</th>').join('') + '</tr></thead>';
+        const bodyHtml = bodyRows.length ? '<tbody>' + bodyRows.join('') + '</tbody>' : '';
+        out.push('<table class="announcement-table">' + headerHtml + bodyHtml + '</table>');
+        continue;
+      } else {
+        for (const r of rows) out.push(r);
+      }
     } else {
-      if (inList) { out += '</ul>'; inList = false; }
-      out += line + '\n';
+      out.push(lines[i]);
+      i++;
     }
   }
-  if (inList) out += '</ul>';
-  html = out;
+  html = out.join('\n');
+
+  // Lists
+  const listLines = html.split('\n');
+  out = [];
+  let inList = false;
+  for (let line of listLines) {
+    if (/^- /.test(line)) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + line.slice(2) + '</li>');
+    } else {
+      if (inList) { out.push('</ul>'); inList = false; }
+      out.push(line);
+    }
+  }
+  if (inList) out.push('</ul>');
+  html = out.join('\n');
+
+  // Paragraphs
   html = html.split(/\n\n+/).map(b => {
     const t = b.trim();
     if (!t) return '';
-    if (/^<(h\d|ul|pre|hr|blockquote)/.test(t)) return t;
+    if (/^<(h\d|ul|pre|hr|blockquote|table)/.test(t)) return t;
     return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
   }).join('\n');
+
+  html = html.replace(/\x00CODEBLOCK(\d+)\x00/g, (m, idx) => codeBlocks[idx]);
+  html = html.replace(/\x00INLINECODE(\d+)\x00/g, (m, idx) => inlineCodes[idx]);
   return html;
 }
 
