@@ -1,14 +1,10 @@
 # 📢 系统公告
 
-## 🔄 v1.4.1 更新说明
+## 🔄 v1.4.3 更新说明
 
-本次更新主要优化了**思考过程（reasoning）的透传处理**：
+- **修复** 模型管理弹窗"全选/取消全选"在某些情况下点击无效的问题（此前若打开过路由配置，全选会因选择器冲突而失效）。
 
-- 上游返回的 `reasoning_content` 现在**原样透传**给客户端，不再合并进 `content`；
-- 移除了此前在流式输出中自动插入的代码围栏（``` ... ```）；
-- 兼容原生思考过程展示（如支持 reasoning 的模型），由客户端自行决定如何渲染。
-
-> ⚠️ 如果你之前依赖网关把思考内容包进正文，升级后需由客户端自行处理 `reasoning_content` 字段。
+> 🛠️ 建议所有用户升级，全选/搜索功能现已恢复正常。
 
 ---
 
@@ -21,7 +17,6 @@
 | NVIDIA（NIM） | https://build.nvidia.com/ |
 | 商汤 SenseNova | https://www.sensenova.cn/ |
 | 魔搭 ModelScope | https://modelscope.cn/my/myaccesstoken |
-| Google Gemini | https://aistudio.google.com/apikey |
 
 > 各平台免费额度政策以官网最新说明为准。
 

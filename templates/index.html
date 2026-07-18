@@ -1228,15 +1228,18 @@ function closeModelManager() {
 
 function filterModalModels() {
   const query = document.getElementById('modalSearchInput').value.toLowerCase();
-  document.querySelectorAll('.model-checkbox-item').forEach(item => {
+  document.querySelectorAll('#modalModelList .model-checkbox-item').forEach(item => {
     const label = item.querySelector('.model-checkbox-label').innerText.toLowerCase();
     item.style.display = label.includes(query) ? 'flex' : 'none';
   });
 }
 
 function selectAllModels(check) {
-  document.querySelectorAll('.model-checkbox-item').forEach(item => {
-    if (item.style.display !== 'none') item.querySelector('.modal-model-checkbox').checked = check;
+  document.querySelectorAll('#modalModelList .model-checkbox-item').forEach(item => {
+    if (item.style.display !== 'none') {
+      const cb = item.querySelector('.modal-model-checkbox');
+      if (cb) cb.checked = check;
+    }
   });
 }
 
