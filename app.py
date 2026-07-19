@@ -43,7 +43,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -999,6 +999,9 @@ async def list_providers(_=Depends(verify_admin)):
 
 @app.post("/api/providers")
 async def add_provider(data: ProviderIn, _=Depends(verify_admin)):
+    import re
+    if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_.\-]+$', data.name):
+        raise HTTPException(400, "名称只能包含中文、字母、数字、横杠(-)、下划线(_)、点(.)，不能含斜杠/空格等特殊字符")
     async with providers_lock:
         for p in providers:
             if p["name"] == data.name:

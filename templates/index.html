@@ -1371,6 +1371,10 @@ async function submitProviderForm() {
 
   if (!name || !baseUrl) { showProviderMsg('名称和 Base URL 不能为空', 'error'); return; }
   if (providerEditMode === 'add' && !apiKey) { showProviderMsg('添加时必须填写 API Key', 'error'); return; }
+  if (!/^[\u4e00-\u9fa5a-zA-Z0-9_.\-]+$/.test(name)) {
+    showProviderMsg('名称只能包含中文、字母、数字、横杠(-)、下划线(_)、点(.)，不能含斜杠/空格等特殊字符', 'error');
+    return;
+  }
 
   const btn = document.getElementById('providerSaveBtn');
   const originalText = btn.innerText;
