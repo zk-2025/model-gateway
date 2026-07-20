@@ -46,6 +46,17 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* 公告/弹窗内链接样式（蓝色可点击，自动适配深色模式） */
+#announcementBody a, .modal-body a, .md-link {
+  color: var(--accent-primary);
+  text-decoration: underline;
+  word-break: break-all;
+  cursor: pointer;
+}
+#announcementBody a:hover, .modal-body a:hover, .md-link:hover {
+  color: var(--accent-primary-hover);
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--mac-bg);
@@ -97,6 +108,21 @@ body {
 [data-theme="dark"] .mac-window {
   box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 25px 50px -12px rgba(0, 0, 0, 0.7);
 }
+
+/* 行内开关（识图辅助等） */
+.switch-inline { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 auto; }
+.switch-inline input { opacity: 0; width: 0; height: 0; }
+.switch-inline .slider-inline {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--mac-border); border-radius: 24px; transition: 0.25s;
+}
+.switch-inline .slider-inline::before {
+  content: ""; position: absolute; height: 18px; width: 18px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: 0.25s; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.switch-inline input:checked + .slider-inline { background: var(--accent-primary); }
+.switch-inline input:checked + .slider-inline::before { transform: translateX(18px); }
+
 
 .mac-titlebar {
   height: 52px;
@@ -422,6 +448,31 @@ input:checked + .slider:before { transform: translateX(14px); }
   background: rgba(255,255,255,0.3);
 }
 [data-theme="dark"] .modal-footer { background: rgba(40,40,40,0.3); border-top: 1px solid rgba(255,255,255,0.1); }
+
+/* 一键配置弹窗专用样式 */
+.preset-intro { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.6; }
+.preset-notice {
+  padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; line-height: 1.6;
+  font-size: 13px; color: var(--text-primary);
+  background: var(--warning-bg); border: 1px solid var(--warning);
+}
+.preset-warn {
+  font-size: 13px; color: var(--danger); margin: 4px 0 14px; min-height: 18px; font-weight: 500;
+}
+.preset-cards { display: flex; flex-direction: column; gap: 12px; }
+.preset-card { border: 1px solid var(--mac-border); border-radius: 10px; padding: 14px 16px; background: rgba(255,255,255,0.4); transition: border-color 0.2s ease; }
+.preset-card:hover { border-color: var(--accent-primary); }
+[data-theme="dark"] .preset-card { background: rgba(40,40,40,0.3); }
+.preset-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.preset-card-name { font-size: 15px; font-weight: 600; }
+.preset-card-badge { font-size: 11px; color: var(--text-secondary); background: rgba(0,0,0,0.05); padding: 2px 8px; border-radius: 10px; }
+[data-theme="dark"] .preset-card-badge { background: rgba(255,255,255,0.08); }
+.preset-card-row { display: flex; gap: 8px; align-items: center; }
+.preset-key-input { flex: 1; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--mac-border); background: transparent; color: var(--text-primary); font-size: 13px; outline: none; transition: border-color 0.2s ease; }
+.preset-key-input:focus { border-color: var(--accent-primary); }
+.preset-card-status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+.btn-sm { padding: 6px 10px; font-size: 12px; }
+.btn-icon { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; border-radius: 8px; flex: 0 0 auto; }
 .model-checkbox-item {
   display: flex; align-items: center; padding: 10px 12px; margin-bottom: 8px;
   border: 1px solid var(--mac-border); border-radius: 8px;
@@ -581,11 +632,8 @@ input:checked + .slider:before { transform: translateX(14px); }
       <div style="display: flex; gap: 12px;">
         <button class="btn" onclick="openRouterManager()">🔀 路由配置</button>
         <button class="btn" onclick="openFeishuModal()" style="color: var(--danger)">📢 系统公告</button>
-        <button class="btn" onclick="document.getElementById('aboutModal').classList.add('show')" id="aboutBtn">
-          💡 使用说明
-        </button>
-        <button class="btn" onclick="toggleTheme()" id="themeBtn">
-          🌙 深色模式
+        <button class="btn btn-icon" onclick="toggleTheme()" id="themeBtn" title="切换深色/浅色模式">
+          🌙
         </button>
         <button class="btn btn-primary" onclick="checkAll()" id="checkAllBtn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.1-8.54L2.5 9M2.5 9V3h6"/></svg>
@@ -606,7 +654,10 @@ input:checked + .slider:before { transform: translateX(14px); }
     <div class="provider-card" style="margin-bottom: 24px; border-color: var(--accent-primary); box-shadow: 0 0 10px rgba(0,122,255,0.1);">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <div class="p-name" style="color: var(--accent-primary); margin-bottom: 0;">🚀 本地接口信息 (Local Gateway)</div>
-        <button class="btn" onclick="openOutputModelsModal()" style="font-size: 12px; padding: 4px 10px;">📦 管理输出模型</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" onclick="openOutputModelsModal()" style="font-size: 12px; padding: 4px 10px;">📦 管理输出模型</button>
+          <button class="btn" onclick="openVisionConfig()" style="font-size: 12px; padding: 4px 10px;">🖼️ 识图配置</button>
+        </div>
       </div>
       <div class="copy-row">
         <span>Base URL:</span>
@@ -626,7 +677,10 @@ input:checked + .slider:before { transform: translateX(14px); }
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; margin-top: 8px;">
       <h2 style="font-size: 16px; font-weight: 600;">上游提供商</h2>
-      <button class="btn btn-primary" onclick="openProviderEditor()" id="addProviderBtn">+ 添加提供商</button>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn" onclick="openPresetModal()" id="presetBtn">⚡ 一键配置</button>
+        <button class="btn btn-primary" onclick="openProviderEditor()" id="addProviderBtn">+ 添加提供商</button>
+      </div>
     </div>
     <div class="providers-section" id="providersSection"></div>
 
@@ -695,51 +749,6 @@ input:checked + .slider:before { transform: translateX(14px); }
       </table>
     </div>
     </div> <!-- end usage-view -->
-  </div>
-</div>
-
-<!-- About Modal -->
-<div class="modal-overlay" id="aboutModal" onclick="if(event.target===this) this.classList.remove('show')">
-  <div class="modal-content" style="max-width: 500px;">
-    <div class="modal-header">
-      <div class="modal-title">💡 使用说明 & 关于</div>
-      <div class="mac-btn close" onclick="document.getElementById('aboutModal').classList.remove('show')" style="cursor: pointer;"></div>
-    </div>
-    <div class="modal-body" style="font-size: 14px; line-height: 1.6; color: var(--text-primary);">
-      <h3 style="margin-top:0;">📝 使用说明</h3>
-
-      <p><b>📍 本地接口（核心用法）</b></p>
-      <p>将上方"本地接口信息"里的 <code>Base URL</code> 和 <code>API Key</code> 填入任何支持 OpenAI 格式的工具（ChatBox、NextChat、SillyTavern、Dify 等）即可使用。网关自动在多个上游提供商间轮询，单渠道挂了无感切换。</p>
-
-      <p><b>📊 实时监控</b></p>
-      <p>展示所有上游模型健康状态、SLA 可用率、平均/极速/最慢延迟、探针次数。模型名旁的状态点代表<b>上次轮询</b>结果：🟢 绿色=正常 / 🔴 红色=异常（限流或报错）/ ⚪ 灰色=尚未巡检。后台每 5 分钟自动巡检，也可点右上角"立即检测"手动触发。</p>
-
-      <p><b>📏 上下文长度</b></p>
-      <p>直接点击监控表格"上下文窗口"列的数字即可修改，回车保存。</p>
-
-      <p><b>🔀 路由配置</b></p>
-      <p>创建自定义路由组并勾选成员模型，客户端 <code>model</code> 字段填路由组名即命中（如 <code>1m</code>、<code>256k</code>），网关在组内按可用率/延迟加权择优。</p>
-
-      <p><b>⚙️ 模型管理</b></p>
-      <p>每个提供商卡片支持：编辑连接信息、勾选启用的模型、删除。添加提供商时自动拉取上游可用模型列表。</p>
-
-      <p><b>📦 管理输出模型</b></p>
-      <p>查看本网关对外暴露的所有模型 ID（格式 <code>提供商名-模型名</code>），可一键复制。</p>
-
-      <p><b>📈 消耗统计</b></p>
-      <p>按近24小时 / 7 天 / 30 天统计请求数、输入/输出/合计 Token，按"渠道·模型"维度明细展示。</p>
-
-      <p><b>🛡️ 智能容灾</b></p>
-      <p>熔断机制：某模型连续失败 3 次熔断 60 秒，恢复后自动重置。路由组按质量分+延迟加权排序候选。流式中断时自动切换下一个候选模型继续输出，用户无感。</p>
-      
-      <hr style="border: 0; border-top: 1px solid var(--mac-border); margin: 20px 0;">
-      <h3 style="margin-top:0;">👨‍💻 关于作者</h3>
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <div><b>🧑 名称：</b> 东野</div>
-        <div><b>💬 微信：</b> ywtc000</div>
-        <div><b>📕 小红书：</b> <a href="https://xhslink.com/m/2w27IQZrDzd" target="_blank" style="color: #0066cc; text-decoration: none;">主页直达 (点击访问)</a></div>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -848,10 +857,14 @@ input:checked + .slider:before { transform: translateX(14px); }
       <div class="form-field">
         <label>API Key</label>
         <input type="password" id="pf_api_key" placeholder="sk-...">
-        <label class="form-check" style="margin-top: 8px; margin-bottom: 0;">
-          <input type="checkbox" id="pf_show_key" onchange="document.getElementById('pf_api_key').type = this.checked ? 'text' : 'password';">
-          <span>显示密钥</span>
-        </label>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+          <label class="form-check" style="margin: 0;">
+            <input type="checkbox" id="pf_show_key" onchange="document.getElementById('pf_api_key').type = this.checked ? 'text' : 'password';">
+            <span>显示密钥</span>
+          </label>
+          <button class="btn" type="button" style="padding:5px 10px; font-size:12px; margin-left:auto;" onclick="testProviderKey()">测试连接</button>
+        </div>
+        <div id="pf_verify_status" style="font-size:12px; margin-top:6px; min-height:16px;"></div>
       </div>
       <label class="form-check">
         <input type="checkbox" id="pf_free_only" checked>
@@ -864,6 +877,59 @@ input:checked + .slider:before { transform: translateX(14px); }
       <div style="display: flex; gap: 12px;">
         <button class="btn" onclick="closeProviderEditor()">取消</button>
         <button class="btn btn-primary" id="providerSaveBtn" onclick="submitProviderForm()">保存并拉取模型</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 预设一键配置弹窗 -->
+<div class="modal-overlay" id="presetModal" onclick="if(event.target===this) closePresetModal()">
+  <div class="modal-content" style="max-width: 660px;">
+    <div class="modal-header">
+      <div class="modal-title">⚡ 一键配置</div>
+      <div class="mac-btn close" onclick="closePresetModal()" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body" id="presetBody">
+      <div style="text-align:center; padding: 24px; color: var(--text-secondary);">加载预设中…</div>
+    </div>
+    <div class="modal-footer">
+      <span style="font-size: 12px; color: var(--text-secondary);" id="presetVersionHint"></span>
+      <div style="display: flex; gap: 12px;">
+        <a class="md-link" id="presetDocLink" href="#" target="_blank" style="font-size: 13px; align-self: center;">📋 详细教程</a>
+        <button class="btn" onclick="closePresetModal()">取消</button>
+        <button class="btn btn-primary" id="presetApplyBtn" onclick="applyPreset()" disabled>一键应用</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 识图模型配置弹窗 -->
+<div class="modal-overlay" id="visionModal" onclick="if(event.target===this) closeVisionConfig()">
+  <div class="modal-content" style="max-width: 620px;">
+    <div class="modal-header">
+      <div class="modal-title">🖼️ 识图配置</div>
+      <div class="mac-btn close" onclick="closeVisionConfig()" style="cursor: pointer;"></div>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; margin-bottom:14px; border:1px solid var(--mac-border); border-radius:8px; background:var(--mac-border);">
+        <div style="font-size:13px;">
+          <div style="font-weight:600;">识图辅助开关</div>
+          <div style="color:var(--text-secondary); font-size:11px; margin-top:2px; line-height:1.5;">开启后，对话带图片时自动用视觉模型识别内容（默认关闭）。注意：开启此功能后，模型需先调用视觉模型识别图片，回复时间会明显变慢。</div>
+          <div style="color:var(--text-secondary); font-size:11px; margin-top:4px; line-height:1.5;">下方请勾选<b style="color:var(--text-primary);">仅支持图片识别</b>的模型；如不清楚该选哪些，请截图咨询 AI。</div>
+        </div>
+        <label class="switch-inline">
+          <input type="checkbox" id="visionAssistSwitch" onchange="toggleVisionAssist(this)">
+          <span class="slider-inline"></span>
+        </label>
+      </div>
+      <div class="preset-intro">勾选作为"识图"路由组成员的模型。客户端 <code>model</code> 填 <code>识图</code> 即在组内轮询。</div>
+      <div id="visionList" style="display:flex; flex-direction:column; gap:6px; max-height:420px; overflow-y:auto;"></div>
+    </div>
+    <div class="modal-footer">
+      <span style="font-size: 12px; color: var(--text-secondary);" id="visionCount"></span>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn" onclick="closeVisionConfig()">取消</button>
+        <button class="btn btn-primary" onclick="saveVisionConfig()">保存</button>
       </div>
     </div>
   </div>
@@ -909,19 +975,14 @@ function toggleTheme() {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
   if (isDark) {
     document.documentElement.removeAttribute('data-theme');
-    document.getElementById('themeBtn').innerHTML = '🌙 深色模式';
+    document.getElementById('themeBtn').innerHTML = '🌙';
     localStorage.setItem('theme', 'light');
   } else {
     document.documentElement.setAttribute('data-theme', 'dark');
-    document.getElementById('themeBtn').innerHTML = '☀️ 浅色模式';
+    document.getElementById('themeBtn').innerHTML = '☀️';
     localStorage.setItem('theme', 'dark');
   }
 }
-document.addEventListener('DOMContentLoaded', () => {
-  if (document.documentElement.getAttribute('data-theme') === 'dark') {
-    document.getElementById('themeBtn').innerHTML = '☀️ 浅色模式';
-  }
-});
 
 /* ============ 数据 ============ */
 let data = [];
@@ -938,8 +999,13 @@ function copyText(text, btn) {
   });
 }
 
+let _detailsLoaded = false;
 async function load() {
   try {
+    if (!_detailsLoaded) {
+      await loadModelDetails();
+      _detailsLoaded = true;
+    }
     const r = await apiFetch('/api/providers');
     const list = await r.json();
     data = [];
@@ -1504,6 +1570,31 @@ function fmtCtx(n) {
 let routersData = {};
 let allModelOptions = [];   // [{provider, model}]
 
+async function loadVisionAssist() {
+  try {
+    const r = await apiFetch('/api/vision-assist');
+    const d = await r.json();
+    document.getElementById('visionAssistSwitch').checked = !!d.enabled;
+  } catch (e) {
+    document.getElementById('visionAssistSwitch').checked = false;
+  }
+}
+
+async function toggleVisionAssist(el) {
+  const enabled = el.checked;
+  try {
+    await apiFetch('/api/vision-assist', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    showToast(enabled ? '识图辅助已开启' : '识图辅助已关闭', 'ok');
+  } catch (e) {
+    el.checked = !enabled;
+    showToast('操作失败：' + e.message, 'error');
+  }
+}
+
 async function openRouterManager() {
   document.getElementById('routerModal').classList.add('show');
   document.getElementById('newRouterName').value = '';
@@ -1526,6 +1617,71 @@ async function openRouterManager() {
   } catch (e) { if (e.message !== 'Unauthorized') console.error(e); routersData = {}; }
   renderRouterList();
 }
+
+let _visionModelSet = new Set();
+async function openVisionConfig() {
+  document.getElementById('visionModal').classList.add('show');
+  loadVisionAssist();
+  const list = document.getElementById('visionList');
+  list.innerHTML = '<div class="empty">加载中…</div>';
+  document.getElementById('visionCount').textContent = '';
+  try {
+    const [pr, rr, vr] = await Promise.all([
+      (await apiFetch('/api/providers')).json(),
+      (await apiFetch('/api/routers')).json(),
+      (await apiFetch('/api/vision-models')).json()
+    ]);
+    const providers = Array.isArray(pr) ? pr : (pr.data || []);
+    let opts = [];
+    providers.forEach(p => (p.models || []).forEach(m => opts.push({ provider: p.name, model: m })));
+    routersData = rr.data || {};
+    _visionModelSet = new Set(vr.data || []);
+    const selected = new Set(routersData['识图'] || []);
+    if (!opts.length) {
+      list.innerHTML = '<div class="empty" style="color:var(--danger)">未获取到模型，请先在一键配置或上游管理对接 API Key</div>';
+      return;
+    }
+    opts.sort((a, b) => (_visionModelSet.has(b.model) ? 1 : 0) - (_visionModelSet.has(a.model) ? 1 : 0));
+    list.innerHTML = opts.map(opt => {
+      const checked = selected.has(opt.model) ? 'checked' : '';
+      return `<label class="model-checkbox-item">
+        <input type="checkbox" class="vision-cb" value="${opt.model}" ${checked}>
+        <div class="model-checkbox-label"><span class="model-provider-badge">${opt.provider}</span>${opt.model}</div>
+      </label>`;
+    }).join('');
+    document.getElementById('visionCount').textContent = '已选 ' + selected.size + ' · 共 ' + opts.length + ' 个模型';
+  } catch (e) {
+    list.innerHTML = '<div class="empty" style="color:var(--danger)">加载失败：' + e.message + '</div>';
+  }
+}
+
+async function saveVisionConfig() {
+  const selected = [];
+  document.querySelectorAll('.vision-cb:checked').forEach(cb => selected.push(cb.value));
+  try {
+    const rr = await (await apiFetch('/api/routers')).json();
+    const all = rr.data || {};
+    all['识图'] = selected;
+    await apiFetch('/api/routers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(all) });
+    routersData = all;
+    showToast('识图模型已保存', 'ok');
+    closeVisionConfig();
+  } catch (e) {
+    showToast('保存失败：' + e.message, 'error');
+  }
+}
+
+function closeVisionConfig() {
+  document.getElementById('visionModal').classList.remove('show');
+}
+
+// 弹窗打开时锁定底层滚动（监听所有 .modal-overlay 的 class 变化，统一处理所有弹窗）
+(function() {
+  const mo = new MutationObserver(() => {
+    document.body.style.overflow = document.querySelector('.modal-overlay.show') ? 'hidden' : '';
+  });
+  document.querySelectorAll('.modal-overlay').forEach(m => mo.observe(m, { attributes: true, attributeFilter: ['class'] }));
+})();
 
 function renderRouterList() {
   const container = document.getElementById('routerListContainer');
@@ -1598,6 +1754,171 @@ async function saveRouters() {
   } catch (e) { if (e.message !== 'Unauthorized') { console.error(e); showToast('保存请求错误', 'error'); } }
 }
 
+/* ============ 外链拦截：target=_blank 统一走系统浏览器（pywebview 内会拦截，改调 /api/open-url） ============ */
+document.addEventListener('click', function(e) {
+  const a = e.target.closest && e.target.closest('a[target="_blank"]');
+  if (a && a.href) {
+    e.preventDefault();
+    apiFetch('/api/open-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: a.href }) });
+  }
+});
+
+/* ============ 预设一键配置 ============ */
+let _presetData = null;
+let _presetKeyStatus = {};
+
+async function openPresetModal() {
+  document.getElementById('presetModal').classList.add('show');
+  const body = document.getElementById('presetBody');
+  body.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-secondary);">加载预设中…</div>';
+  document.getElementById('presetApplyBtn').disabled = true;
+  document.getElementById('presetVersionHint').textContent = '';
+  document.getElementById('presetDocLink').style.display = 'none';
+  try {
+    const r = await (await apiFetch('/api/preset-info')).json();
+    if (!r || !r.platforms) {
+      body.innerHTML = '<div style="text-align:center; padding:32px; color:var(--text-secondary);"><div style="font-size:18px; margin-bottom:8px;">当前未开启预设配置</div><div style="font-size:13px;">预设由开发者维护，请稍后再试，或在上方使用「+ 添加提供商」手动配置。</div></div>';
+      document.getElementById('presetApplyBtn').disabled = true;
+      return;
+    }
+    _presetData = r;
+    _presetKeyStatus = {};
+    document.getElementById('presetVersionHint').textContent = '预设版本 ' + (r.version || '');
+    const dl = document.getElementById('presetDocLink');
+    if (r.doc_url) { dl.href = r.doc_url; dl.style.display = ''; } else { dl.style.display = 'none'; }
+    renderPresetCards(r);
+  } catch (e) {
+    body.innerHTML = '<div style="text-align:center; padding:32px; color:var(--danger);">加载预设失败：' + (e.message||'') + '</div>';
+  }
+}
+
+function renderPresetCards(preset) {
+  const body = document.getElementById('presetBody');
+  let html = '<div class="preset-intro preset-notice">如果已有同名上游，一键配置会覆盖历史数据，应用完成后请重启客户端使配置完全生效。</div>';
+  html += '<div class="preset-warn" id="presetWarn"></div>';
+  html += '<div class="preset-cards">';
+  for (const [name, cfg] of Object.entries(preset.platforms)) {
+    html += '<div class="preset-card">';
+    html += '<div class="preset-card-head">';
+    html += '<span class="preset-card-name">' + name + '</span>';
+    html += '<span class="preset-card-badge">' + (cfg.auth_hint || '无需认证') + '</span>';
+    html += '</div>';
+    html += '<div class="preset-card-row">';
+    html += '<input type="password" class="preset-key-input" id="preset_key_' + name + '" placeholder="填入 ' + name + ' 的 API Key" oninput="resetPresetKeyStatus(\'' + name + '\')">';
+          html += '<button class="btn btn-icon" onclick="verifyPresetKey(\'' + name + '\')" title="测试连接">🔍</button>';
+          html += '<button class="btn btn-icon" onclick="openPresetKeyPage(\'' + name + '\')" title="打开获取 Key 的页面">🔑</button>';
+    html += '</div>';
+    html += '<div class="preset-card-status" id="preset_status_' + name + '"></div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+function resetPresetKeyStatus(name) {
+  _presetKeyStatus[name] = null;
+  const el = document.getElementById('preset_status_' + name);
+  if (el) el.innerHTML = '';
+  updatePresetApplyBtn();
+}
+
+async function verifyPresetKey(name) {
+  const cfg = (_presetData && _presetData.platforms && _presetData.platforms[name]) || null;
+  if (!cfg) return;
+  const keyEl = document.getElementById('preset_key_' + name);
+  const key = (keyEl && keyEl.value) || '';
+  const stEl = document.getElementById('preset_status_' + name);
+  if (!key.trim()) { if (stEl) stEl.innerHTML = '<span style="color:var(--danger);">请先填写 Key</span>'; return; }
+  if (stEl) stEl.innerHTML = '<span style="color:var(--text-secondary);">校验中…</span>';
+  try {
+    const r = await (await apiFetch('/api/providers/verify-key', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ base_url: cfg.base_url, api_key: key }) })).json();
+    _presetKeyStatus[name] = r;
+    if (r && r.ok) stEl.innerHTML = '<span style="color:var(--success);">✓ ' + (r.detail||'连接成功') + '</span>';
+    else stEl.innerHTML = '<span style="color:var(--danger);">✗ ' + (r && r.detail || '校验失败') + '</span>';
+  } catch (e) {
+    _presetKeyStatus[name] = { ok:false, detail:e.message };
+    if (stEl) stEl.innerHTML = '<span style="color:var(--danger);">✗ ' + e.message + '</span>';
+  }
+  updatePresetApplyBtn();
+}
+
+function openPresetKeyPage(name) {
+  const cfg = (_presetData && _presetData.platforms && _presetData.platforms[name]) || null;
+  if (cfg && cfg.key_page_url) apiFetch('/api/open-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: cfg.key_page_url }) });
+}
+
+function updatePresetApplyBtn() {
+  const btn = document.getElementById('presetApplyBtn');
+  const warn = document.getElementById('presetWarn');
+  if (!btn || !_presetData) return;
+  const names = Object.keys(_presetData.platforms);
+  const empty = names.filter(name => {
+    const el = document.getElementById('preset_key_' + name);
+    return !el || !el.value.trim();
+  });
+  const allFilled = empty.length === 0;
+  btn.disabled = !allFilled;
+  if (warn) warn.textContent = allFilled ? '' : '请先填写全部 ' + names.length + ' 个平台的 API Key 后再提交（还差：' + empty.join('、') + '）';
+}
+
+async function applyPreset() {
+  const btn = document.getElementById('presetApplyBtn');
+  if (!_presetData) return;
+  const keys = {};
+  const empty = [];
+  for (const name of Object.keys(_presetData.platforms)) {
+    const el = document.getElementById('preset_key_' + name);
+    const v = (el && el.value || '').trim();
+    keys[name] = v;
+    if (!v) empty.push(name);
+  }
+  if (empty.length) {
+    const warn = document.getElementById('presetWarn');
+    if (warn) warn.textContent = '请先填写全部平台的 API Key 后再提交（还差：' + empty.join('、') + '）';
+    return;
+  }
+  btn.disabled = true; btn.textContent = '应用中…';
+  try {
+    const r = await (await apiFetch('/api/providers/preset', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ keys }) })).json();
+    if (r && r.ok) {
+      let msg = (r.created && r.created.length) ? '已创建: ' + r.created.join(', ') : '无新增（均已存在）';
+      if (r.results) {
+        const fails = Object.entries(r.results).filter(([n, x]) => !x.ok).map(([n, x]) => n + ': ' + x.detail);
+        if (fails.length) msg += '\n未成功: ' + fails.join('; ');
+      }
+      showToast('一键配置完成\n' + msg, 'ok');
+      closePresetModal();
+      if (typeof load === 'function') load();
+      if (typeof checkAll === 'function') checkAll();
+    } else {
+      showToast('配置未完全成功', 'error');
+    }
+  } catch (e) {
+    showToast('应用失败：' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '一键应用';
+  }
+}
+
+function closePresetModal() {
+  document.getElementById('presetModal').classList.remove('show');
+}
+
+async function testProviderKey() {
+  const base_url = (document.getElementById('pf_base_url') || {}).value || '';
+  const api_key = (document.getElementById('pf_api_key') || {}).value || '';
+  const st = document.getElementById('pf_verify_status');
+  if (!base_url.trim() || !api_key.trim()) { if (st) st.innerHTML = '<span style="color:var(--danger);">请先填写 Base URL 和 API Key</span>'; return; }
+  if (st) st.innerHTML = '<span style="color:var(--text-secondary);">校验中…</span>';
+  try {
+    const r = await (await apiFetch('/api/providers/verify-key', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ base_url, api_key }) })).json();
+    if (r && r.ok) st.innerHTML = '<span style="color:var(--success);">✓ ' + (r.detail||'连接成功') + '</span>';
+    else st.innerHTML = '<span style="color:var(--danger);">✗ ' + (r && r.detail || '校验失败') + '</span>';
+  } catch (e) {
+    if (st) st.innerHTML = '<span style="color:var(--danger);">✗ ' + e.message + '</span>';
+  }
+}
+
 /* ============ 系统公告 ============ */
 function renderMarkdown(md) {
   if (!md || !md.trim()) return '<div class="empty">暂无公告</div>';
@@ -1624,6 +1945,10 @@ function renderMarkdown(md) {
   html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  // 裸 URL 自动转链接（排除已被 href=" 包裹的，避免重复匹配）
+  html = html.replace(/(^|[\s>])(https?:\/\/[^\s<"'）。，；！？、]+)(?=\s|$|<)/gm, (m, pre, url) => {
+    return pre + '<a href="' + url + '" target="_blank">' + url + '</a>';
+  });
   html = html.replace(/^---$/gm, '<hr>');
   html = html.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
 
