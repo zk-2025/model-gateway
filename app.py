@@ -1,7 +1,9 @@
 import json
 import asyncio
 import time
+import os
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
 from collections import deque
@@ -13,6 +15,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import httpx
 import secrets
+import webbrowser
+import re
+import copy
 
 # ============================================================
 # 日志
@@ -43,7 +48,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.5.0"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -77,6 +82,11 @@ def load_config():
     return data
 
 
+def save_config():
+    """将内存中的 app_config 原子写回 config.json。"""
+    atomic_write(CONFIG_FILE, json.dumps(app_config, ensure_ascii=False, indent=2))
+
+
 def load_providers():
     if DATA_FILE.exists():
         return json.loads(DATA_FILE.read_text(encoding="utf-8"))
@@ -88,14 +98,33 @@ def save_providers(data):
 
 
 def load_meta():
+    """三层合并：内置兜底(APP_DIR/models_meta.json) → 外部覆盖(DATA_DIR/models_meta.json)。
+    dict 字段深合并，其余字段直接覆盖。"""
     default = {
         "aliases": {},
         "context_limits": {},
         "non_chat_keywords": [],
         "model_descriptions": {},
+        "supports_vision": {},
     }
+    # 内置版（打包内嵌进 exe，断网保底；非打包时与外部版同路径）
+    builtin = APP_DIR / "models_meta.json"
+    if builtin.exists():
+        try:
+            default.update(json.loads(builtin.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    # 外部版（exe 同目录，用户可覆盖/补充）
     if META_FILE.exists():
-        default.update(json.loads(META_FILE.read_text(encoding="utf-8")))
+        try:
+            ext = json.loads(META_FILE.read_text(encoding="utf-8"))
+            for k, v in ext.items():
+                if isinstance(v, dict) and isinstance(default.get(k), dict):
+                    default[k].update(v)
+                else:
+                    default[k] = v
+        except Exception:
+            pass
     return default
 
 
@@ -103,12 +132,12 @@ def load_routers():
     if ROUTERS_FILE.exists():
         try:
             return json.loads(ROUTERS_FILE.read_text(encoding="utf-8"))
-        except:
+        except json.JSONDecodeError:
             pass
     return {}
 
 def save_routers():
-    ROUTERS_FILE.write_text(json.dumps(ROUTERS, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(ROUTERS_FILE, json.dumps(ROUTERS, indent=2, ensure_ascii=False))
 
 
 app_config = load_config()
@@ -120,6 +149,7 @@ MODEL_ALIASES = meta.get("aliases", {})
 CONTEXT_LIMITS = meta.get("context_limits", {})
 NON_CHAT_KEYWORDS = meta.get("non_chat_keywords", [])
 MODEL_DESCRIPTIONS = meta.get("model_descriptions", {})
+SUPPORTS_VISION = meta.get("supports_vision", {})
 
 
 # ============================================================
@@ -323,12 +353,36 @@ def get_enabled_models(provider: dict) -> list[str]:
     return [m for m in provider.get("models", []) if m not in disabled]
 
 
+def normalize_model(model: str) -> str:
+    """归一化模型名到标准名（去 xxx/ 前缀 + 转小写）。
+    先查别名表做名字修正（如 mistral-small-2603 → mistral-small-4-119b-2603），
+    再统一去前缀转小写。这样不同平台/大小写命名都归一到同一标准名。"""
+    if model in MODEL_ALIASES:
+        model = MODEL_ALIASES[model]
+    return model.split('/')[-1].lower()
+
+
 def get_context_length(model: str) -> int:
-    actual = MODEL_ALIASES.get(model, model)
-    ctx = CONTEXT_LIMITS.get(model) or CONTEXT_LIMITS.get(actual)
+    # ① 归一化名查表
+    norm = normalize_model(model)
+    ctx = CONTEXT_LIMITS.get(norm) or CONTEXT_LIMITS.get(model)
     if ctx:
         return ctx
-    return model_details.get(actual, {}).get("context_length") or 32768
+    # ② 大小写回退（防标准名表里仍存了带前缀/带大小写的旧键）
+    lower = model.lower()
+    for k, v in CONTEXT_LIMITS.items():
+        if k.lower() == lower:
+            return v
+    # ③ 轮询拉取的 model_details
+    return (model_details.get(norm, {}).get("context_length")
+            or model_details.get(model, {}).get("context_length")
+            or 32768)
+
+
+def is_vision_model(model: str) -> bool:
+    """是否支持识图（基于 supports_vision 标记 + 归一化匹配）"""
+    norm = normalize_model(model)
+    return bool(SUPPORTS_VISION.get(norm) or SUPPORTS_VISION.get(model))
 
 
 def is_1m_model(model: str) -> bool:
@@ -504,9 +558,54 @@ async def fetch_models(base_url: str, api_key: str, free_only: bool = True) -> l
     return []
 
 
+async def verify_provider_key_impl(base_url: str, api_key: str) -> dict:
+    """校验上游 key 是否有效：调上游 /models 接口，401/403 判定 key 无效"""
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        resp = await http_client.get(url, headers=headers, timeout=15)
+        if resp.status_code in (401, 403):
+            return {"ok": False, "detail": f"Key 无效（HTTP {resp.status_code}）"}
+        if resp.status_code == 200:
+            return {"ok": True, "detail": "连接成功"}
+        return {"ok": False, "detail": f"上游返回 HTTP {resp.status_code}"}
+    except httpx.RequestError as e:
+        return {"ok": False, "detail": f"连接失败：{str(e)[:150]}"}
+    except Exception as e:
+        return {"ok": False, "detail": f"校验异常：{str(e)[:150]}"}
+
+
 # ============================================================
 # 轮询
 # ============================================================
+async def run_health_checks(tasks: list[tuple[str, str, str, str]]) -> dict:
+    """并发检测所有 (name, model, base_url, api_key) 任务，返回 {key: result}。"""
+    sem = asyncio.Semaphore(10)
+
+    async def limited_check(url, key, m):
+        async with sem:
+            return await check_model(url, key, m)
+
+    results = await asyncio.gather(
+        *[limited_check(url, key, m) for _, m, url, key in tasks],
+        return_exceptions=True,
+    )
+    new_status = {}
+    for (name, m, _, _), result in zip(tasks, results):
+        k = f"{name}||{m}"
+        if isinstance(result, Exception):
+            new_status[k] = {
+                "status": "error",
+                "detail": str(result)[:200],
+                "checked_at": time.time(),
+            }
+        else:
+            result["checked_at"] = time.time()
+            new_status[k] = result
+        update_model_quality(k, new_status[k])
+    return new_status
+
+
 async def poll_all():
     global health_status, last_poll_time, last_check_time
     # 首次拉取 model details
@@ -524,29 +623,7 @@ async def poll_all():
             for p in list(providers):
                 for m in get_enabled_models(p):
                     tasks.append((p["name"], m, p["base_url"], p["api_key"]))
-            sem = asyncio.Semaphore(10)
-
-            async def limited_check(url, key, m):
-                async with sem:
-                    return await check_model(url, key, m)
-
-            results = await asyncio.gather(
-                *[limited_check(url, key, m) for _, m, url, key in tasks],
-                return_exceptions=True,
-            )
-            new_status = {}
-            for (name, m, _, _), result in zip(tasks, results):
-                k = f"{name}||{m}"
-                if isinstance(result, Exception):
-                    new_status[k] = {
-                        "status": "error",
-                        "detail": str(result)[:200],
-                        "checked_at": time.time(),
-                    }
-                else:
-                    result["checked_at"] = time.time()
-                    new_status[k] = result
-                update_model_quality(k, new_status[k])
+            new_status = await run_health_checks(tasks)
             health_status = new_status
             last_poll_time = time.time()
             last_check_time = last_poll_time
@@ -568,6 +645,13 @@ async def poll_all():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client, poll_task
+    # 运行时日志落盘（带轮转，避免无限膨胀）；放在此处确保 uvicorn 配置 logging 后再挂，不被清空
+    try:
+        _fh = RotatingFileHandler(DATA_DIR / "gateway.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        logging.getLogger().addHandler(_fh)
+    except Exception:
+        pass
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(120.0, connect=10.0),
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
@@ -583,6 +667,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="模型API网关", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 templates.env.auto_reload = True
+
+
+@app.middleware("http")
+async def no_cache_middleware(request: Request, call_next):
+    """给页面和 API 响应加 no-cache，避免 pywebview/浏览器缓存旧前端。"""
+    resp = await call_next(request)
+    if request.url.path in ("/",) or request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 # ============================================================
@@ -609,6 +704,19 @@ class ToggleModelIn(BaseModel):
     enabled: bool
 
 
+class VerifyKeyIn(BaseModel):
+    base_url: str
+    api_key: str
+
+
+class OpenUrlIn(BaseModel):
+    url: str
+
+
+class PresetApplyIn(BaseModel):
+    keys: dict = {}
+
+
 # ============================================================
 # 模型选择
 # ============================================================
@@ -618,7 +726,7 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
     raw = []
     unhealthy_raw = []
     
-    # 1. 如果请求的是自定义路由组
+    # 如果请求的是自定义路由组
     if model in ROUTERS:
         target_models = set(ROUTERS[model])
         for p in providers:
@@ -627,13 +735,13 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
                     k = f"{p['name']}||{m}"
                     raw.append((p, m, k))
         scored = [
-            (get_quality_score(k), 1.0 / (get_avg_latency(k) or 1e9), p, m, k)
+            (get_quality_score(k), get_avg_latency(k) or 1e9, p, m)
             for p, m, k in raw
         ]
-        scored.sort(key=lambda x: (-x[0], -x[1]))
-        return [(p, m) for _, _, p, m, _ in scored]
-        
-    # 3. 如果请求的是具体模型
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [(p, m) for _, _, p, m in scored]
+
+    # 否则按具体模型匹配
     for p in providers:
         for m in get_enabled_models(p):
             prefixed = f"{p['name']}-{m}"
@@ -688,20 +796,6 @@ def restore_hermes_text(text: str) -> str:
 
 def merge_reasoning(obj: dict) -> dict:
     """保留 reasoning_content 字段原样透传，不合并到 content"""
-    return obj
-    for choice in choices:
-        target = choice.get("delta") or choice.get("message")
-        if not target or not isinstance(target, dict):
-            continue
-        rc = target.pop("reasoning_content", None)
-        if rc is None:
-            continue
-        wrapped = f"<think>{rc}</think>"
-        c = target.get("content")
-        if isinstance(c, str) and c:
-            target["content"] = c + wrapped
-        else:
-            target["content"] = wrapped
     return obj
 
 # ============================================================
@@ -762,8 +856,16 @@ async def get_history(hours: int = 24, _=Depends(verify_admin)):
     return await read_history(hours)
 
 
+_stability_cache: dict = {}
+STABILITY_CACHE_TTL = 30
+
+
 @app.get("/api/stability")
 async def get_stability(hours: int = 24, _=Depends(verify_admin)):
+    now = time.time()
+    cached = _stability_cache.get(hours)
+    if cached and now - cached[0] < STABILITY_CACHE_TTL:
+        return cached[1]
     records = await read_history(hours)
     model_stats: dict = {}
     for rec in records:
@@ -805,8 +907,10 @@ async def get_stability(hours: int = 24, _=Depends(verify_admin)):
             "min_latency_ms": min(s["latencies"]) if s["latencies"] else None,
             "max_latency_ms": max(s["latencies"]) if s["latencies"] else None,
             "last_status": health_status.get(key, {}).get("status", "unknown"),
+            "vision": is_vision_model(model),
         })
     result.sort(key=lambda x: (-x["availability"], x["avg_latency_ms"] or 99999))
+    _stability_cache[hours] = (now, result)
     return result
 
 
@@ -898,7 +1002,7 @@ async def update_context_limit(req: ContextLimitUpdate, _=Depends(verify_admin))
         meta["context_limits"] = {}
     meta["context_limits"][req.model] = req.context_length
     CONTEXT_LIMITS[req.model] = req.context_length
-    META_FILE.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(META_FILE, json.dumps(meta, indent=2, ensure_ascii=False))
     return {"ok": True}
 
 
@@ -910,7 +1014,7 @@ async def delete_context_limit(model: str, _=Depends(verify_admin)):
     if "context_limits" in meta and model in meta["context_limits"]:
         del meta["context_limits"][model]
     CONTEXT_LIMITS.pop(model, None)
-    META_FILE.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(META_FILE, json.dumps(meta, indent=2, ensure_ascii=False))
     return {"ok": True}
 
 
@@ -925,6 +1029,12 @@ async def save_routers_api(request: Request, _=Depends(verify_admin)):
     ROUTERS = body
     save_routers()
     return {"ok": True}
+
+
+@app.get("/api/vision-models")
+async def vision_models_api(_=Depends(verify_admin)):
+    """返回 supports_vision 标记的模型名列表，供前端识图配置标记"""
+    return {"ok": True, "data": sorted(SUPPORTS_VISION.keys())}
 
 
 # ---------- 系统公告（Gitee 远程，本地兜底） ----------
@@ -1002,6 +1112,10 @@ async def add_provider(data: ProviderIn, _=Depends(verify_admin)):
     import re
     if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_.\-]+$', data.name):
         raise HTTPException(400, "名称只能包含中文、字母、数字、横杠(-)、下划线(_)、点(.)，不能含斜杠/空格等特殊字符")
+    # 校验 key 有效性（保存前强制校验）
+    vr = await verify_provider_key_impl(data.base_url, data.api_key)
+    if not vr["ok"]:
+        raise HTTPException(400, f"API Key 校验失败：{vr['detail']}")
     async with providers_lock:
         for p in providers:
             if p["name"] == data.name:
@@ -1011,6 +1125,118 @@ async def add_provider(data: ProviderIn, _=Depends(verify_admin)):
         providers.append(data.model_dump())
         save_providers(providers)
     return {"ok": True}
+
+
+@app.post("/api/providers/verify-key")
+async def verify_provider_key(data: VerifyKeyIn, _=Depends(verify_admin)):
+    """校验上游 base_url + api_key 是否可用"""
+    return await verify_provider_key_impl(data.base_url, data.api_key)
+
+
+@app.post("/api/open-url")
+async def open_url(data: OpenUrlIn, _=Depends(verify_admin)):
+    """用系统默认浏览器打开外链（pywebview 内 target=_blank 会被拦截，统一走此接口）"""
+    url = (data.url or "").strip()
+    if not re.match(r'^https?://', url, re.I):
+        raise HTTPException(400, "仅允许 http/https 链接")
+    try:
+        webbrowser.open(url)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, f"打开失败: {e}")
+
+
+@app.get("/api/preset-info")
+async def preset_info(_=Depends(verify_admin)):
+    """返回预设清单（远端热更新优先，内置兜底）"""
+    return await load_preset()
+
+
+@app.get("/api/vision-assist")
+async def get_vision_assist(_=Depends(verify_admin)):
+    """返回识图辅助开关状态（默认关闭）"""
+    cfg = app_config.get("vision_assist", {})
+    enabled = cfg.get("enabled", False) if isinstance(cfg, dict) else False
+    return {"enabled": enabled}
+
+
+@app.put("/api/vision-assist")
+async def set_vision_assist(data: dict, _=Depends(verify_admin)):
+    """开启/关闭识图辅助，并持久化到 config.json"""
+    enabled = bool(data.get("enabled", False))
+    cfg = app_config.get("vision_assist", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg["enabled"] = enabled
+    app_config["vision_assist"] = cfg
+    save_config()
+    return {"enabled": enabled}
+
+
+@app.post("/api/providers/preset")
+async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
+    """一键应用预设：三平台逐个校验 key → 创建/覆盖 provider → 合并路由组。
+    任一平台失败不连坐，返回每个平台的结果。已有同名 provider 会被覆盖（用新 key 重建）。"""
+    preset = await load_preset()
+    platforms = preset.get("platforms", {})
+    keys = data.keys or {}
+    results = {}
+    created_names = []
+    async with providers_lock:
+        existing_names = {p["name"] for p in providers}
+        for plat_name, plat_cfg in platforms.items():
+            key = (keys.get(plat_name) or "").strip()
+            if not key:
+                results[plat_name] = {"ok": False, "detail": "未填写 Key"}
+                continue
+            # 校验 key
+            vr = await verify_provider_key_impl(plat_cfg["base_url"], key)
+            if not vr["ok"]:
+                results[plat_name] = {"ok": False, "detail": vr["detail"]}
+                continue
+            # 同名则先移除旧配置（覆盖历史数据，用新 key 重建）
+            if plat_name in existing_names:
+                providers[:] = [p for p in providers if p["name"] != plat_name]
+                existing_names.discard(plat_name)
+            # 拉模型
+            fetched = await fetch_models(plat_cfg["base_url"], key, plat_cfg.get("free_only", True))
+            visible = plat_cfg.get("models_visible", [])
+            if visible:
+                # 只保留 visible 列表里的模型，不要的模型根本不写进 models
+                models = [m for m in fetched if m in set(visible)]
+                # visible 里有但上游没拉到的，也加入 models（用户显式想要的）
+                for m in visible:
+                    if m not in models:
+                        models.append(m)
+                disabled = []
+            else:
+                models = fetched
+                disabled = []
+            providers.append({
+                "name": plat_name,
+                "base_url": plat_cfg["base_url"],
+                "api_key": key,
+                "models": models,
+                "disabled_models": disabled,
+                "free_only": plat_cfg.get("free_only", True),
+            })
+            existing_names.add(plat_name)
+            created_names.append(plat_name)
+            results[plat_name] = {"ok": True, "detail": f"已配置 {len(models)} 个模型"}
+        save_providers(providers)
+        # 合并路由组（去重，不覆盖已有成员）
+        preset_routers = preset.get("routers", {})
+        for gname, members in preset_routers.items():
+            if gname in ROUTERS:
+                existing = set(ROUTERS[gname])
+                for m in members:
+                    if m not in existing:
+                        ROUTERS[gname].append(m)
+                        existing.add(m)
+            else:
+                ROUTERS[gname] = list(members)
+        save_routers()
+    return {"ok": True, "results": results, "created": created_names}
 
 
 @app.post("/api/providers/{name}/fetch-models")
@@ -1091,30 +1317,11 @@ async def manual_check(name: str, model: str, _=Depends(verify_admin)):
 
 @app.post("/api/check/all")
 async def check_all(_=Depends(verify_admin)):
-    results = {}
     tasks = []
-
-    for p in providers:
+    for p in list(providers):
         for m in get_enabled_models(p):
             tasks.append((p["name"], m, p["base_url"], p["api_key"]))
-    sem = asyncio.Semaphore(10)
-
-    async def limited_check(url, key, m):
-        async with sem:
-            return await check_model(url, key, m)
-
-    check_results = await asyncio.gather(
-        *[limited_check(url, key, m) for _, m, url, key in tasks],
-        return_exceptions=True,
-    )
-    for (name, m, _, _), result in zip(tasks, check_results):
-        k = f"{name}||{m}"
-        if isinstance(result, Exception):
-            results[k] = {"status": "error", "detail": str(result)[:200], "checked_at": time.time()}
-        else:
-            result["checked_at"] = time.time()
-            results[k] = result
-        update_model_quality(k, results[k])
+    results = await run_health_checks(tasks)
     health_status.update(results)
     await append_history(results)
     mark_full_check()
@@ -1122,20 +1329,274 @@ async def check_all(_=Depends(verify_admin)):
 
 
 # ============================================================
+# 预设模板（三层加载：远端热更新 → 内置兜底）
+# ============================================================
+PRESET_REMOTE_URL = "https://gitee.com/ywtc000/dongye/raw/master/presets.json"
+PRESET_DOC_URL = "https://pv284bk9no6.feishu.cn/wiki/HCOuwXuZGibDUGkWLlpcQuiLnDf"
+PRESET_CACHE_TTL = 300
+
+# 内置兜底预设（断网保底；平台变更时改远端 presets.json 热更新即可，无需重新打包）
+BUILTIN_PRESET = {
+    "version": "2026-07-20",
+    "updated_at": "2026-07-20",
+    "doc_url": PRESET_DOC_URL,
+    "platforms": {
+        "NVIDIA": {
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "free_only": True,
+            "key_page_url": "https://build.nvidia.com/",
+            "auth_hint": "需绑定手机号",
+            "models_visible": [
+                "deepseek-ai/deepseek-v4-flash",
+                "deepseek-ai/deepseek-v4-pro",
+                "minimaxai/minimax-m3",
+                "mistralai/mistral-large-3-675b-instruct-2512",
+                "mistralai/mistral-small-4-119b-2603",
+                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-ultra-550b-a55b",
+                "qwen/qwen3.5-122b-a10b",
+                "z-ai/glm-5.2",
+            ],
+        },
+        "SenseNova": {
+            "base_url": "https://token.sensenova.cn/v1",
+            "free_only": False,
+            "key_page_url": "https://platform.sensenova.cn/console/keys",
+            "auth_hint": "手机号注册登录即可",
+            "models_visible": [
+                "deepseek-v4-flash",
+                "glm-5.2",
+                "sensenova-6.7-flash-lite",
+            ],
+        },
+        "魔搭": {
+            "base_url": "https://api-inference.modelscope.cn/v1",
+            "free_only": False,
+            "key_page_url": "https://modelscope.cn/my/myaccesstoken",
+            "auth_hint": "需绑定阿里云账号（支付宝实名）",
+            "models_visible": [
+                "Qwen/Qwen3.5-122B-A10B",
+                "Qwen/Qwen3.5-397B-A17B",
+                "deepseek-ai/DeepSeek-V4-Flash",
+                "deepseek-ai/DeepSeek-V4-Pro",
+            ],
+        },
+    },
+    "routers": {
+        "256k": [
+            "mistralai/mistral-large-3-675b-instruct-2512",
+            "mistralai/mistral-small-4-119b-2603",
+            "nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            "qwen/qwen3.5-122b-a10b",
+            "sensenova-6.7-flash-lite",
+            "Qwen/Qwen3.5-122B-A10B",
+            "Qwen/Qwen3.5-397B-A17B",
+        ],
+        "1m": [
+            "deepseek-ai/deepseek-v4-pro",
+            "minimaxai/minimax-m3",
+            "z-ai/glm-5.2",
+            "glm-5.2",
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "deepseek-ai/deepseek-v4-flash",
+            "deepseek-v4-flash",
+            "deepseek-ai/DeepSeek-V4-Flash",
+        ],
+        "识图": [
+            "sensenova-6.7-flash-lite",
+            "mistralai/mistral-large-3-675b-instruct-2512",
+            "mistralai/mistral-small-4-119b-2603",
+        ],
+    },
+}
+
+_preset_cache = {"data": None, "ts": 0.0}
+
+
+async def load_preset(force_remote: bool = False) -> dict:
+    """三层加载：远端热更新(优先) → 内置兜底。缓存 PRESET_CACHE_TTL 秒。"""
+    now = time.time()
+    if (not force_remote and _preset_cache["data"]
+            and now - _preset_cache["ts"] < PRESET_CACHE_TTL):
+        return _preset_cache["data"]
+    if http_client:
+        try:
+            resp = await http_client.get(PRESET_REMOTE_URL, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("platforms"):
+                    _preset_cache["data"] = data
+                    _preset_cache["ts"] = now
+                    return data
+        except Exception:
+            logger.warning("load_preset remote fetch failed, fallback to builtin")
+    if not _preset_cache["data"]:
+        _preset_cache["data"] = BUILTIN_PRESET
+        _preset_cache["ts"] = now
+    return _preset_cache["data"]
+
+
+# ============================================================
+# 识图两阶段：含图片请求 → 视觉模型转文字 → 转交原路由组
+# ============================================================
+VISION_DESC_PROMPT = (
+    "请极其详细客观地描述这张图片的所有可见内容，包括：所有可见文字（逐字转录，保留原始格式与标点）、"
+    "人物/物体/场景、颜色/布局/位置关系、图表数据/坐标轴/数值、任何对理解图片有用的细节。"
+    "客观描述，不要解读或猜测。直接输出描述内容，不要加'这张图片显示了'之类的前缀。"
+    "请使用简体中文输出描述。"
+)
+
+
+def has_image(body: dict) -> bool:
+    """检测 messages 是否含 image_url（OpenAI 多模态格式）"""
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    return True
+    return False
+
+
+async def describe_one_image(image_url: str) -> str | None:
+    """调识图路由组的视觉模型，把图片转成文字描述。失败返回 None。"""
+    candidates = []
+    if "识图" in ROUTERS:
+        candidates = pick_available_models("识图", force=True)
+    if not candidates:
+        # 退而求其次：全局找支持视觉的模型
+        for p in providers:
+            for m in get_enabled_models(p):
+                if is_vision_model(m):
+                    k = f"{p['name']}||{m}"
+                    if not is_circuit_open(k):
+                        candidates.append((p, m))
+    if not candidates:
+        return None
+    for provider, model in candidates:
+        k = f"{provider['name']}||{model}"
+        url = provider["base_url"].rstrip("/") + "/chat/completions"
+        payload = {
+            "model": MODEL_ALIASES.get(model, model),
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": VISION_DESC_PROMPT},
+            ]}],
+            "stream": False,
+            "max_tokens": 2000,
+        }
+        headers = {"Authorization": f"Bearer {provider['api_key']}", "Content-Type": "application/json"}
+        try:
+            resp = await http_client.post(url, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                try:
+                    content = resp.json()["choices"][0]["message"]["content"]
+                    if isinstance(content, str) and content.strip():
+                        record_success(k)
+                        return content.strip()
+                    else:
+                        logger.warning("empty vision response from %s", provider["name"])
+                        record_fail(k)
+                        continue
+                except (KeyError, IndexError, TypeError):
+                    record_fail(k)
+                    continue
+            logger.warning("vision describe failed %d from %s", resp.status_code, provider["name"])
+            record_fail(k)
+        except Exception:
+            logger.warning("vision describe error to %s", provider["name"])
+            record_fail(k)
+            continue
+    return None
+
+
+async def describe_images(body: dict) -> tuple[dict, bool, list[str]]:
+    """把 body 里的图片替换成文字描述。
+    只识别最后一条 user 消息里的图片（避免多轮对话历史图片反复识别）；
+    历史消息里的图片替换为提示文字，不重新识别。
+    返回 (改造后的 body, 是否全部成功, 各图片描述摘要列表)。"""
+    if not has_image(body):
+        return body, True, []
+    new_body = copy.deepcopy(body)
+    messages = new_body.get("messages", [])
+
+    # 找到最后一条 user 消息的索引
+    last_user_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], dict) and messages[i].get("role") == "user":
+            last_user_idx = i
+            break
+
+    # 只收集最后一条 user 消息里的图片 URL
+    img_urls = []
+    if last_user_idx >= 0:
+        content = messages[last_user_idx].get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    iu = part.get("image_url")
+                    img_url = iu.get("url", "") if isinstance(iu, dict) else ""
+                    img_urls.append(img_url)
+
+    # 并发识别最新消息的图片，保持顺序
+    descs = list(await asyncio.gather(
+        *[describe_one_image(u) if u else asyncio.sleep(0, result=None) for u in img_urls]
+    )) if img_urls else []
+
+    # 回填：最后一条 user 消息用识别结果，历史消息的图片替换为提示
+    summaries = []
+    all_ok = True
+    desc_idx = 0
+    for i, msg in enumerate(messages):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        new_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                iu = part.get("image_url")
+                img_url = iu.get("url", "") if isinstance(iu, dict) else ""
+                if not img_url:
+                    new_parts.append(part)
+                    continue
+                if i == last_user_idx:
+                    # 最新消息的图片：用识别结果
+                    desc = descs[desc_idx] if desc_idx < len(descs) else None
+                    desc_idx += 1
+                    if desc:
+                        new_parts.append({"type": "text", "text": f"【图片内容】{desc}"})
+                        summaries.append(desc[:80])
+                    else:
+                        new_parts.append({"type": "text", "text": "【图片内容】（识别失败）"})
+                        all_ok = False
+                else:
+                    # 历史消息的图片：不重新识别，替换为提示
+                    new_parts.append({"type": "text", "text": "【图片内容】（历史图片）"})
+            else:
+                new_parts.append(part)
+        msg["content"] = new_parts
+    return new_body, all_ok, summaries
+
+
+# ============================================================
 # 代理（客户端鉴权）
 # ============================================================
-async def _stream_with_failover(candidates, body, is_router):
-    """流式转发，中断时自动切换下一个候选模型继续输出"""
+async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
+    """流式转发，中断时自动切换下一个候选模型继续输出。prelude 为先输出给用户的提示文本。"""
 
     async def gen():
         accumulated = ""
         prefix_done = False
         max_attempts = 2 if is_router else 1
 
+        if prelude:
+            yield "data: " + json.dumps({"choices": [{"delta": {"content": prelude}, "index": 0}]}, ensure_ascii=False) + "\n\n"
+
         for attempt in range(max_attempts):
             for provider, model in candidates:
                 k = f"{provider['name']}||{model}"
-                req_body = json.loads(json.dumps(body))
+                req_body = copy.deepcopy(body)
                 req_body["model"] = MODEL_ALIASES.get(model, model)
 
                 if accumulated:
@@ -1251,6 +1712,25 @@ async def proxy_chat(request: Request, force: bool = False):
     body = ensure_lang_reply(body)
     requested_model = body.get("model")
 
+    # 识图两阶段：含图片且目标非识图组/识图模型 → 先用视觉模型转文字再交原路由组
+    vision_cfg = app_config.get("vision_assist", {})
+    vision_enabled = vision_cfg.get("enabled", False) if isinstance(vision_cfg, dict) else False
+    is_vision_request = (requested_model == "识图") or bool(requested_model and is_vision_model(requested_model))
+    vision_prelude = ""
+    if vision_enabled and has_image(body) and not is_vision_request:
+        new_body, ok, summaries = await describe_images(body)
+        if ok:
+            body = new_body
+            if summaries:
+                vision_prelude = "🖼️ 已识别图片内容，正在生成回复…\n\n"
+        else:
+            # 识图失败 → 降级直接走识图组（保证用户至少有回答）
+            if "识图" in ROUTERS:
+                requested_model = "识图"
+                vision_prelude = "⚠️ 图片识别失败，已降级由视觉模型直接回复。\n\n"
+            else:
+                vision_prelude = "⚠️ 图片识别失败且无可用视觉模型，可能无法处理图片。\n\n"
+
     candidates = pick_available_models(requested_model, force=force)
     if not candidates:
         raise HTTPException(503, f"无可用的模型: {requested_model or '任意'}")
@@ -1260,12 +1740,12 @@ async def proxy_chat(request: Request, force: bool = False):
     last_err = None
 
     if stream:
-        return await _stream_with_failover(candidates, body, is_router)
+        return await _stream_with_failover(candidates, body, is_router, prelude=vision_prelude)
 
     for attempt in (2,) if is_router else (1,):
         for provider, model in candidates:
             k = f"{provider['name']}||{model}"
-            req_body = json.loads(json.dumps(body))
+            req_body = copy.deepcopy(body)
             req_body["model"] = MODEL_ALIASES.get(model, model)
             url = provider["base_url"].rstrip("/") + "/chat/completions"
             headers = {
@@ -1302,7 +1782,11 @@ async def proxy_chat(request: Request, force: bool = False):
                     try:
                         msg = parsed["choices"][0]["message"]
                         c = msg.get("content")
-                        prefix = f"🤖 {provider['name']} · {model}"
+                        prefix_parts = []
+                        if vision_prelude:
+                            prefix_parts.append(vision_prelude.rstrip())
+                        prefix_parts.append(f"🤖 {provider['name']} · {model}")
+                        prefix = "\n\n".join(prefix_parts)
                         if isinstance(c, str) and c:
                             msg["content"] = f"{prefix}\n\n{c}"
                         elif isinstance(c, str):
@@ -1329,8 +1813,15 @@ async def proxy_chat(request: Request, force: bool = False):
     raise HTTPException(502, f"所有候选模型均失败: {last_err}")
 
 
+_models_cache = {"ts": 0, "data": None}
+MODELS_CACHE_TTL = 30
+
+
 @app.api_route("/v1/models", methods=["GET"], dependencies=[Depends(verify_client)])
 async def proxy_models():
+    now = time.time()
+    if _models_cache["data"] and now - _models_cache["ts"] < MODELS_CACHE_TTL:
+        return _models_cache["data"]
     models_list = []
 
     # 自定义路由组作为可输出的模型
@@ -1361,7 +1852,10 @@ async def proxy_models():
                 "max_position_embeddings": ctx_len,
                 "max_model_len": ctx_len,
             })
-    return {"object": "list", "data": models_list}
+    result = {"object": "list", "data": models_list}
+    _models_cache["data"] = result
+    _models_cache["ts"] = now
+    return result
 
 
 if __name__ == "__main__":
@@ -1373,7 +1867,44 @@ if __name__ == "__main__":
     import pystray
     import msvcrt
 
-    # ---- 单实例限制：防止重复启动 ----
+    # ---- 单实例限制 ----
+    # 真实客户端（打包 exe）：已运行则弹窗提示并退出，不允许重复打开。
+    # 开发/测试（python app.py）：设环境变量 GATEWAY_AUTO_KILL=1 时，
+    # 自动关闭占用端口的旧实例后再启动，方便反复重启调试。
+    import socket
+    import subprocess
+
+    def port_in_use(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    def kill_old_instance(port: int):
+        try:
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            for line in out.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    pid = line.split()[-1]
+                    if pid.isdigit():
+                        subprocess.run(
+                            ["taskkill", "/PID", pid, "/F"],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        return True
+        except Exception:
+            pass
+        return False
+
+    AUTO_KILL = os.environ.get("GATEWAY_AUTO_KILL") == "1"
+
+    if AUTO_KILL and port_in_use(8000):
+        kill_old_instance(8000)
+        time.sleep(1.5)
+
+    # 文件锁：真实客户端靠它拦截重复启动；测试模式端口已清，锁也能正常获取
     LOCK_FILE = str(DATA_DIR / ".gateway.lock")
     try:
         _lock_fd = open(LOCK_FILE, "w")
