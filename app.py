@@ -48,7 +48,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -1176,7 +1176,9 @@ async def set_vision_assist(data: dict, _=Depends(verify_admin)):
 @app.post("/api/providers/preset")
 async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
     """一键应用预设：三平台逐个校验 key → 创建/覆盖 provider → 合并路由组。
-    任一平台失败不连坐，返回每个平台的结果。已有同名 provider 会被覆盖（用新 key 重建）。"""
+    - 用户填了 Key 的平台：校验 → 覆盖旧配置 → 重新拉模型
+    - 用户没填 Key 但已有同名 provider：跳过，保留原配置不变
+    - 用户没填 Key 且无同名 provider：标记未配置"""
     preset = await load_preset()
     platforms = preset.get("platforms", {})
     keys = data.keys or {}
@@ -1187,7 +1189,11 @@ async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
         for plat_name, plat_cfg in platforms.items():
             key = (keys.get(plat_name) or "").strip()
             if not key:
-                results[plat_name] = {"ok": False, "detail": "未填写 Key"}
+                # 没填 Key：如果已有同名 provider，跳过保留原配置；否则标记未配置
+                if plat_name in existing_names:
+                    results[plat_name] = {"ok": True, "detail": "保留已有配置（未填写新 Key）"}
+                else:
+                    results[plat_name] = {"ok": False, "detail": "未填写 Key"}
                 continue
             # 校验 key
             vr = await verify_provider_key_impl(plat_cfg["base_url"], key)
@@ -1202,9 +1208,7 @@ async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
             fetched = await fetch_models(plat_cfg["base_url"], key, plat_cfg.get("free_only", True))
             visible = plat_cfg.get("models_visible", [])
             if visible:
-                # 只保留 visible 列表里的模型，不要的模型根本不写进 models
                 models = [m for m in fetched if m in set(visible)]
-                # visible 里有但上游没拉到的，也加入 models（用户显式想要的）
                 for m in visible:
                     if m not in models:
                         models.append(m)

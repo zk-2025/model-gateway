@@ -866,10 +866,6 @@ input:checked + .slider:before { transform: translateX(14px); }
         </div>
         <div id="pf_verify_status" style="font-size:12px; margin-top:6px; min-height:16px;"></div>
       </div>
-      <label class="form-check">
-        <input type="checkbox" id="pf_free_only" checked>
-        <span>仅拉取免费模型 (free_only)</span>
-      </label>
       <div id="providerModalMsg" style="font-size: 12px; display: none;"></div>
     </div>
     <div class="modal-footer">
@@ -1367,7 +1363,6 @@ async function openProviderEditor(name) {
       const list = await r.json();
       const p = list.find(x => x.name === name) || {};
       document.getElementById('pf_base_url').value = p.base_url || '';
-      document.getElementById('pf_free_only').checked = p.free_only !== false;
     } catch (e) { if (e.message !== 'Unauthorized') console.error(e); }
     document.getElementById('pf_api_key').value = '';
     document.getElementById('pf_api_key').placeholder = '留空表示不修改密钥';
@@ -1381,7 +1376,6 @@ async function openProviderEditor(name) {
     document.getElementById('pf_base_url').value = '';
     document.getElementById('pf_api_key').value = '';
     document.getElementById('pf_api_key').placeholder = 'sk-...';
-    document.getElementById('pf_free_only').checked = true;
   }
   document.getElementById('pf_show_key').checked = false;
   document.getElementById('pf_api_key').type = 'password';
@@ -1433,7 +1427,7 @@ async function submitProviderForm() {
   const name = document.getElementById('pf_name').value.trim();
   const baseUrl = document.getElementById('pf_base_url').value.trim();
   const apiKey = document.getElementById('pf_api_key').value;
-  const freeOnly = document.getElementById('pf_free_only').checked;
+  const freeOnly = true;
 
   if (!name || !baseUrl) { showProviderMsg('名称和 Base URL 不能为空', 'error'); return; }
   if (providerEditMode === 'add' && !apiKey) { showProviderMsg('添加时必须填写 API Key', 'error'); return; }
@@ -1766,6 +1760,7 @@ document.addEventListener('click', function(e) {
 /* ============ 预设一键配置 ============ */
 let _presetData = null;
 let _presetKeyStatus = {};
+let _existingProviders = [];
 
 async function openPresetModal() {
   document.getElementById('presetModal').classList.add('show');
@@ -1775,13 +1770,17 @@ async function openPresetModal() {
   document.getElementById('presetVersionHint').textContent = '';
   document.getElementById('presetDocLink').style.display = 'none';
   try {
-    const r = await (await apiFetch('/api/preset-info')).json();
+    const [r, pr] = await Promise.all([
+      (await apiFetch('/api/preset-info')).json(),
+      (await apiFetch('/api/providers')).json().catch(() => [])
+    ]);
     if (!r || !r.platforms) {
       body.innerHTML = '<div style="text-align:center; padding:32px; color:var(--text-secondary);"><div style="font-size:18px; margin-bottom:8px;">当前未开启预设配置</div><div style="font-size:13px;">预设由开发者维护，请稍后再试，或在上方使用「+ 添加提供商」手动配置。</div></div>';
       document.getElementById('presetApplyBtn').disabled = true;
       return;
     }
     _presetData = r;
+    _existingProviders = Array.isArray(pr) ? pr : [];
     _presetKeyStatus = {};
     document.getElementById('presetVersionHint').textContent = '预设版本 ' + (r.version || '');
     const dl = document.getElementById('presetDocLink');
@@ -1794,25 +1793,30 @@ async function openPresetModal() {
 
 function renderPresetCards(preset) {
   const body = document.getElementById('presetBody');
-  let html = '<div class="preset-intro preset-notice">如果已有同名上游，一键配置会覆盖历史数据，应用完成后请重启客户端使配置完全生效。</div>';
+  const existingNames = new Set(_existingProviders.map(p => p.name));
+  let html = '<div class="preset-intro preset-notice">已配置的平台可留空 Key 保留原配置；填入新 Key 会覆盖旧配置。</div>';
   html += '<div class="preset-warn" id="presetWarn"></div>';
   html += '<div class="preset-cards">';
   for (const [name, cfg] of Object.entries(preset.platforms)) {
+    const hasExisting = existingNames.has(name);
+    const badge = hasExisting ? '<span class="preset-card-badge" style="color:var(--success);">已有配置</span>' : '<span class="preset-card-badge">' + (cfg.auth_hint || '无需认证') + '</span>';
+    const placeholder = hasExisting ? '留空保留原配置，或填入新 Key 覆盖' : '填入 ' + name + ' 的 API Key';
     html += '<div class="preset-card">';
     html += '<div class="preset-card-head">';
     html += '<span class="preset-card-name">' + name + '</span>';
-    html += '<span class="preset-card-badge">' + (cfg.auth_hint || '无需认证') + '</span>';
+    html += badge;
     html += '</div>';
     html += '<div class="preset-card-row">';
-    html += '<input type="password" class="preset-key-input" id="preset_key_' + name + '" placeholder="填入 ' + name + ' 的 API Key" oninput="resetPresetKeyStatus(\'' + name + '\')">';
-          html += '<button class="btn btn-icon" onclick="verifyPresetKey(\'' + name + '\')" title="测试连接">🔍</button>';
-          html += '<button class="btn btn-icon" onclick="openPresetKeyPage(\'' + name + '\')" title="打开获取 Key 的页面">🔑</button>';
+    html += '<input type="password" class="preset-key-input" id="preset_key_' + name + '" placeholder="' + placeholder + '" oninput="resetPresetKeyStatus(\'' + name + '\')">';
+    html += '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="verifyPresetKey(\'' + name + '\')">测试</button>';
+    html += '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="openPresetKeyPage(\'' + name + '\')">官网</button>';
     html += '</div>';
     html += '<div class="preset-card-status" id="preset_status_' + name + '"></div>';
     html += '</div>';
   }
   html += '</div>';
   body.innerHTML = html;
+  updatePresetApplyBtn();
 }
 
 function resetPresetKeyStatus(name) {
@@ -1852,39 +1856,52 @@ function updatePresetApplyBtn() {
   const warn = document.getElementById('presetWarn');
   if (!btn || !_presetData) return;
   const names = Object.keys(_presetData.platforms);
-  const empty = names.filter(name => {
+  const existingNames = new Set(_existingProviders.map(p => p.name));
+  // 没填 Key 且也没已有配置的平台 → 缺失
+  const missing = names.filter(name => {
     const el = document.getElementById('preset_key_' + name);
-    return !el || !el.value.trim();
+    return (!el || !el.value.trim()) && !existingNames.has(name);
   });
-  const allFilled = empty.length === 0;
-  btn.disabled = !allFilled;
-  if (warn) warn.textContent = allFilled ? '' : '请先填写全部 ' + names.length + ' 个平台的 API Key 后再提交（还差：' + empty.join('、') + '）';
+  btn.disabled = missing.length > 0;
+  if (warn) warn.textContent = missing.length ? '以下平台尚未配置，请填写 Key：' + missing.join('、') : '';
 }
 
 async function applyPreset() {
   const btn = document.getElementById('presetApplyBtn');
   if (!_presetData) return;
   const keys = {};
-  const empty = [];
+  const existingNames = new Set(_existingProviders.map(p => p.name));
+  const willOverwrite = [];
+  const missing = [];
   for (const name of Object.keys(_presetData.platforms)) {
     const el = document.getElementById('preset_key_' + name);
     const v = (el && el.value || '').trim();
-    keys[name] = v;
-    if (!v) empty.push(name);
+    if (v) {
+      keys[name] = v;
+      if (existingNames.has(name)) willOverwrite.push(name);
+    } else {
+      if (!existingNames.has(name)) missing.push(name);
+    }
   }
-  if (empty.length) {
-    const warn = document.getElementById('presetWarn');
-    if (warn) warn.textContent = '请先填写全部平台的 API Key 后再提交（还差：' + empty.join('、') + '）';
+  if (missing.length) {
+    showToast('以下平台尚未配置，请填写 Key：' + missing.join('、'), 'warn');
     return;
+  }
+  // 有覆盖操作时弹确认框
+  if (willOverwrite.length) {
+    const confirmMsg = '以下平台已存在配置，填入新 Key 将覆盖旧配置：\n' + willOverwrite.join('、') + '\n\n确定要覆盖吗？';
+    if (!confirm(confirmMsg)) return;
   }
   btn.disabled = true; btn.textContent = '应用中…';
   try {
     const r = await (await apiFetch('/api/providers/preset', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ keys }) })).json();
     if (r && r.ok) {
-      let msg = (r.created && r.created.length) ? '已创建: ' + r.created.join(', ') : '无新增（均已存在）';
+      let msg = '';
       if (r.results) {
-        const fails = Object.entries(r.results).filter(([n, x]) => !x.ok).map(([n, x]) => n + ': ' + x.detail);
-        if (fails.length) msg += '\n未成功: ' + fails.join('; ');
+        const okList = Object.entries(r.results).filter(([n, x]) => x.ok).map(([n, x]) => n + ': ' + x.detail);
+        const failList = Object.entries(r.results).filter(([n, x]) => !x.ok).map(([n, x]) => n + ': ' + x.detail);
+        if (okList.length) msg += okList.join('\n');
+        if (failList.length) msg += (msg ? '\n' : '') + '未成功:\n' + failList.join('\n');
       }
       showToast('一键配置完成\n' + msg, 'ok');
       closePresetModal();
