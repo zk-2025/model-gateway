@@ -29,12 +29,16 @@ test_sensenova*.json
 .codebuddy/
 .pytest_cache/
 
+# AI 工作记录（内部使用，不公开）
+DEVLOG.md
+
 # 日志
 *.log
 
 # 调试/临时文件
 sse_raw*.txt
 test_req.json
+.gateway.lock
 
 # 辅助工具（非核心）
 封面生成器.html
