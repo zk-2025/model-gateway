@@ -8,6 +8,8 @@
 
 `openai兼容` `免费API` `无限额度` `LLM聚合` `API网关` `智能轮询` `熔断容灾` `负载均衡` `NVIDIA` `商汤` `魔搭` `Gemini` `API监控` `反代` `AI网关` `openai` `api-gateway` `llm` `free-api` `reverse-proxy`
 
+![模型监控面板](docs/screenshot.png)
+
 ---
 
 ## 📖 项目简介
