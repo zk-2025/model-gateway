@@ -823,6 +823,25 @@ input:checked + .slider:before { transform: translateX(14px); }
   </div>
 </div>
 
+<!-- 一键配置等待弹窗 -->
+<div class="modal-overlay" id="presetWaitModal">
+  <div class="modal-content" style="max-width:420px;">
+    <div class="modal-header">
+      <div class="modal-title">⚡ 正在配置</div>
+    </div>
+    <div class="modal-body" style="padding:24px; text-align:center;">
+      <div style="font-size:40px; margin-bottom:12px;">⏳</div>
+      <p style="font-size:14px; color:var(--text-primary); line-height:1.7;">
+        正在拉取模型列表并配置路由组，<br>约需 <b>1 分钟</b>，请耐心等待。
+      </p>
+      <p style="font-size:12px; color:var(--text-secondary); margin-top:8px;">
+        配置完成后会自动提示结果。
+      </p>
+      <button class="btn btn-primary" onclick="closePresetWaitModal()" style="margin-top:16px; padding:8px 32px;">我知道了</button>
+    </div>
+  </div>
+</div>
+
 <!-- 更新弹窗 -->
 <div class="modal-overlay" id="updateModal" onclick="if(event.target===this) closeUpdateModal()">
   <div class="modal-content" style="max-width:480px;">
@@ -1936,7 +1955,8 @@ async function applyPreset() {
     if (!confirm(confirmMsg)) return;
   }
   btn.disabled = true; btn.textContent = '配置中请耐心等待…';
-  showToast('正在拉取模型并配置路由，约需 1 分钟，请耐心等待…', 'ok', 90000);
+  closePresetModal();  // 关闭一键配置窗口
+  document.getElementById('presetWaitModal').classList.add('show');  // 弹出等待提示
   try {
     const r = await (await apiFetch('/api/providers/preset', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ keys }) })).json();
     if (r && r.ok) {
@@ -1948,7 +1968,6 @@ async function applyPreset() {
         if (failList.length) msg += (msg ? '\n' : '') + '未成功:\n' + failList.join('\n');
       }
       showToast('一键配置完成\n' + msg, 'ok');
-      closePresetModal();
       if (typeof load === 'function') load();
       if (typeof checkAll === 'function') checkAll();
     } else {
@@ -1957,12 +1976,16 @@ async function applyPreset() {
   } catch (e) {
     showToast('应用失败：' + e.message, 'error');
   } finally {
+    closePresetWaitModal();
     btn.disabled = false; btn.textContent = '一键应用';
   }
 }
 
 function closePresetModal() {
   document.getElementById('presetModal').classList.remove('show');
+}
+function closePresetWaitModal() {
+  document.getElementById('presetWaitModal').classList.remove('show');
 }
 
 async function testProviderKey() {
