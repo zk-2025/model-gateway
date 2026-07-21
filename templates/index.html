@@ -1000,13 +1000,13 @@ async function apiFetch(url, options = {}) {
 
 /* ============ Toast 提示 ============ */
 let _toastTimer = null;
-function showToast(msg, type = 'ok') {
+function showToast(msg, type = 'ok', duration = 3000) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;
   el.className = 'toast show ' + type;
   if (_toastTimer) clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { el.className = 'toast ' + type; }, 3000);
+  _toastTimer = setTimeout(() => { el.className = 'toast ' + type; }, duration);
 }
 
 /* ============ 主题 ============ */
@@ -1935,7 +1935,8 @@ async function applyPreset() {
     const confirmMsg = '以下平台已存在配置，填入新 Key 将覆盖旧配置：\n' + willOverwrite.join('、') + '\n\n确定要覆盖吗？';
     if (!confirm(confirmMsg)) return;
   }
-  btn.disabled = true; btn.textContent = '应用中…';
+  btn.disabled = true; btn.textContent = '配置中请耐心等待…';
+  showToast('正在拉取模型并配置路由，约需 1 分钟，请耐心等待…', 'ok', 90000);
   try {
     const r = await (await apiFetch('/api/providers/preset', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ keys }) })).json();
     if (r && r.ok) {
