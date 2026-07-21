@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
 <title>模型监控 | Model Dashboard</title>
 <style>
 * { -webkit-user-select: text; user-select: text; }
@@ -26,6 +27,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --mac-bg: #1c1c1e;
   --mac-window-bg: rgba(30, 30, 30, 0.55);
   --mac-border: rgba(255, 255, 255, 0.12);
@@ -333,7 +335,12 @@ body {
 }
 
 [data-theme="dark"] .filter-bar input, [data-theme="dark"] .filter-bar select {
-  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--mac-border); box-shadow: none;
+  background: #1c1c1e; border: 1px solid var(--mac-border); box-shadow: none;
+  color: #ffffff;
+  color-scheme: dark;
+}
+[data-theme="dark"] .filter-bar select option {
+  background: #1c1c1e; color: #ffffff;
 }
 [data-theme="dark"] .filter-bar input:focus, [data-theme="dark"] .filter-bar select:focus {
   background: rgba(255, 255, 255, 0.1);
@@ -547,7 +554,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 #announcementBody h3 { font-size: 15px; }
 #announcementBody p { margin: 8px 0; }
 #announcementBody ul, #announcementBody ol { margin: 8px 0; padding-left: 24px; }
-#announcementBody li { margin: 4px 0; }
+#announcementBody li { margin: 2px 0; line-height: 1.6; }
 #announcementBody a { color: var(--accent-primary); text-decoration: none; }
 #announcementBody a:hover { text-decoration: underline; }
 #announcementBody code { background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
@@ -593,6 +600,13 @@ input:checked + .slider:before { transform: translateX(14px); }
 [data-theme="dark"] #announcementBody tr:nth-child(even) { background: rgba(255,255,255,0.03); }
 #announcementBody tr:hover { background: rgba(0,122,255,0.05); }
 #announcementBody p:has(+ table), #announcementBody p:has(+ ul), #announcementBody p:has(+ ol) { margin-bottom: 4px; }
+/* 更新弹窗 */
+.update-notes { font-size:13px; line-height:1.7; color:var(--text-secondary); max-height:120px; overflow-y:auto; margin:8px 0 16px; padding:8px 12px; background:var(--mac-header); border-radius:6px; white-space:pre-wrap; }
+.update-progress-bar { width:100%; height:6px; border-radius:3px; background:var(--mac-border); margin:12px 0; overflow:hidden; }
+.update-progress-fill { height:100%; background:var(--primary); border-radius:3px; transition: width 0.3s; width:0%; }
+.update-progress-text { font-size:12px; color:var(--text-secondary); text-align:center; }
+.update-actions { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
+.update-actions .btn-primary { padding:8px 20px; }
 
 </style>
 </head>
@@ -632,6 +646,7 @@ input:checked + .slider:before { transform: translateX(14px); }
       <div style="display: flex; gap: 12px;">
         <button class="btn" onclick="openRouterManager()">🔀 路由配置</button>
         <button class="btn" onclick="openFeishuModal()" style="color: var(--danger)">📢 系统公告</button>
+        <button class="btn" onclick="checkUpdate(false)">🔄 检查更新</button>
         <button class="btn btn-icon" onclick="toggleTheme()" id="themeBtn" title="切换深色/浅色模式">
           🌙
         </button>
@@ -808,6 +823,31 @@ input:checked + .slider:before { transform: translateX(14px); }
   </div>
 </div>
 
+<!-- 更新弹窗 -->
+<div class="modal-overlay" id="updateModal" onclick="if(event.target===this) closeUpdateModal()">
+  <div class="modal-content" style="max-width:480px;">
+    <div class="modal-header">
+      <div class="modal-title" id="updateTitle">🔔 发现新版本</div>
+      <div class="mac-btn close" onclick="closeUpdateModal()" style="cursor:pointer;"></div>
+    </div>
+    <div class="modal-body" style="padding:20px 24px;">
+      <div id="updateBody">
+        <div style="margin-bottom:8px;">当前版本：<b>v{{ app_version }}</b> → 最新版本：<b id="updateLatestVer">-</b></div>
+        <div id="updateNotes" class="update-notes" style="display:none;"></div>
+        <div id="updateProgress" style="display:none;">
+          <div class="update-progress-bar"><div class="update-progress-fill" id="updateProgressFill"></div></div>
+          <div class="update-progress-text" id="updateProgressText">准备下载...</div>
+        </div>
+        <div id="updateError" style="color:var(--danger);font-size:13px;display:none;margin-top:8px;"></div>
+        <div class="update-actions" id="updateActions">
+          <button class="btn" id="updateSkipBtn" onclick="closeUpdateModal()" style="font-size:13px;">稍后提醒</button>
+          <button class="btn btn-primary" id="updateDoBtn" onclick="doUpdate()" style="font-size:13px;">立即更新</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal -->
 <div class="modal-overlay" id="modelModal" onclick="if(event.target===this) closeModelManager()">
   <div class="modal-content">
@@ -945,6 +985,9 @@ async function apiFetch(url, options = {}) {
   const token = getToken();
   if (token) {
     options.headers = Object.assign({}, options.headers || {}, { 'Authorization': 'Bearer ' + token });
+  }
+  if (options.body && typeof options.body === 'string') {
+    options.headers = Object.assign({}, options.headers || {}, { 'Content-Type': 'application/json' });
   }
   const r = await fetch(url, options);
   if (r.status === 401) {
@@ -1549,7 +1592,7 @@ function switchMainTab(tab) {
     usageView.style.display = 'block';
     
     if (document.getElementById('usageOverview').innerHTML === '') {
-      loadUsage(1);
+      loadUsage();
     }
   }
 }
@@ -2006,10 +2049,20 @@ function renderMarkdown(md) {
   const listLines = html.split('\n');
   out = [];
   let inList = false;
-  for (let line of listLines) {
+  for (let i = 0; i < listLines.length; i++) {
+    const line = listLines[i];
     if (/^- /.test(line)) {
       if (!inList) { out.push('<ul>'); inList = true; }
       out.push('<li>' + line.slice(2) + '</li>');
+    } else if (line.trim() === '' && inList) {
+      // 空行：往后看一行，如果还是列表项就保留 ul（避免空行断开列表导致巨间距）
+      let j = i + 1;
+      while (j < listLines.length && listLines[j].trim() === '') j++;
+      if (j < listLines.length && /^- /.test(listLines[j])) {
+        continue;  // 跳过空行，ul 保持打开
+      }
+      if (inList) { out.push('</ul>'); inList = false; }
+      out.push(line);
     } else {
       if (inList) { out.push('</ul>'); inList = false; }
       out.push(line);
@@ -2031,6 +2084,8 @@ function renderMarkdown(md) {
   return html;
 }
 
+let _lastAnnouncementHash = '';
+
 async function openFeishuModal() {
   document.getElementById('feishuModal').classList.add('show');
   const body = document.getElementById('announcementBody');
@@ -2043,12 +2098,27 @@ async function openFeishuModal() {
     if (!d.ok) { body.innerHTML = '<div class="empty">' + (d.content || '暂无公告') + '</div>'; return; }
     const md = d.content || '';
     body.innerHTML = renderMarkdown(md);
+    if (d.hash) _lastAnnouncementHash = d.hash;
   } catch (e) {
     if (e.message !== 'Unauthorized') { console.error(e); body.innerHTML = '<div class="empty" style="color:var(--danger)">加载失败</div>'; }
   }
 }
 function closeFeishuModal() {
   document.getElementById('feishuModal').classList.remove('show');
+}
+
+/* 定时检测公告变动 */
+function startAnnouncementWatcher() {
+  setInterval(async function() {
+    try {
+      const r = await apiFetch('/api/announcement');
+      const d = await r.json();
+      if (d.ok && d.hash && _lastAnnouncementHash && d.hash !== _lastAnnouncementHash) {
+        _lastAnnouncementHash = d.hash;
+        openFeishuModal();
+      }
+    } catch(e) {}
+  }, 60000);
 }
 
 /* ============ 上下文长度 inline 编辑 ============ */
@@ -2095,10 +2165,115 @@ document.addEventListener('click', e => {
   });
 });
 
+/* ============ 在线更新 ============ */
+let _updateInfo = null;
+let _updatePollTimer = null;
+
+async function checkUpdate(silent) {
+  try {
+    const r = await apiFetch('/api/check-update');
+    const d = await r.json();
+    if (!d.ok || !d.has_update) {
+      if (!silent) { showToast('已是最新版本 v' + (d.current || '{{ app_version }}'), 'ok'); }
+      return;
+    }
+    _updateInfo = d;
+    document.getElementById('updateLatestVer').textContent = d.latest;
+    const notesEl = document.getElementById('updateNotes');
+    if (d.release_notes) {
+      notesEl.textContent = d.release_notes;
+      notesEl.style.display = 'block';
+    } else {
+      notesEl.style.display = 'none';
+    }
+    document.getElementById('updateTitle').textContent = d.force_update ? '⚠️ 必须更新' : '🔔 发现新版本';
+    document.getElementById('updateDoBtn').textContent = '立即更新';
+    document.getElementById('updateProgress').style.display = 'none';
+    document.getElementById('updateError').style.display = 'none';
+    document.getElementById('updateActions').style.display = 'flex';
+    document.getElementById('updateSkipBtn').style.display = d.force_update ? 'none' : '';
+    document.getElementById('updateModal').classList.add('show');
+  } catch (e) {
+    if (!silent) { showToast('检查更新失败: ' + e.message, 'danger'); }
+  }
+}
+
+async function doUpdate() {
+  if (!_updateInfo || !_updateInfo.download_url) {
+    showToast('缺少下载地址', 'danger'); return;
+  }
+  document.getElementById('updateActions').style.display = 'none';
+  document.getElementById('updateProgress').style.display = 'block';
+  document.getElementById('updateProgressFill').style.width = '0%';
+  document.getElementById('updateProgressText').textContent = '正在连接...';
+  document.getElementById('updateSkipBtn').style.display = 'none';
+  try {
+    const r = await apiFetch('/api/start-download', { method:'POST', body: JSON.stringify({url: _updateInfo.download_url}) });
+    const d = await r.json();
+    if (!d.ok) { throw new Error(d.error || '启动下载失败'); }
+    _updatePollTimer = setInterval(pollUpdateProgress, 500);
+  } catch (e) {
+    document.getElementById('updateError').textContent = '下载失败: ' + e.message;
+    document.getElementById('updateError').style.display = 'block';
+    document.getElementById('updateActions').style.display = 'flex';
+    document.getElementById('updateDoBtn').textContent = '重试';
+    document.getElementById('updateProgress').style.display = 'none';
+  }
+}
+
+async function pollUpdateProgress() {
+  try {
+    const r = await apiFetch('/api/download-progress');
+    const d = await r.json();
+    if (!d.ok) return;
+    if (d.error) {
+      clearInterval(_updatePollTimer);
+      document.getElementById('updateError').textContent = d.error;
+      document.getElementById('updateError').style.display = 'block';
+      document.getElementById('updateActions').style.display = 'flex';
+      document.getElementById('updateDoBtn').textContent = '重试';
+      document.getElementById('updateProgress').style.display = 'none';
+      return;
+    }
+    const pct = d.progress || 0;
+    document.getElementById('updateProgressFill').style.width = pct + '%';
+    if (d.total > 0) {
+      const mbDone = ((d.progress / 100) * d.total / 1048576).toFixed(1);
+      const mbTotal = (d.total / 1048576).toFixed(1);
+      document.getElementById('updateProgressText').textContent = pct + '%（' + mbDone + ' MB / ' + mbTotal + ' MB）';
+    } else {
+      document.getElementById('updateProgressText').textContent = pct + '%';
+    }
+    if (d.done) {
+      clearInterval(_updatePollTimer);
+      document.getElementById('updateProgressText').textContent = '下载完成，正在安装...';
+      setTimeout(applyUpdateNow, 300);
+    }
+  } catch (e) {}
+}
+
+async function applyUpdateNow() {
+  try {
+    const r = await apiFetch('/api/apply-update', { method:'POST' });
+    const d = await r.json();
+    if (!d.ok) { throw new Error(d.error); }
+  } catch (e) {
+    document.getElementById('updateError').textContent = '安装失败: ' + e.message;
+    document.getElementById('updateError').style.display = 'block';
+  }
+}
+
+function closeUpdateModal() {
+  document.getElementById('updateModal').classList.remove('show');
+  if (_updatePollTimer) { clearInterval(_updatePollTimer); _updatePollTimer = null; }
+}
+
 /* ============ 启动 ============ */
 function startApp() {
   loadModelDetails(); load(); updatePollStatus(); startPolling();
   openFeishuModal();
+  setTimeout(function(){ checkUpdate(true); }, 2000);
+  setTimeout(startAnnouncementWatcher, 5000);
 }
 startApp();
 </script>

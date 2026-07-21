@@ -28,7 +28,14 @@
     "mistral-small-4-119b-2603": true,
     "mistral-large-3-675b-instruct-2512": true,
     "sensenova-6.7-flash-lite": true,
-    "sensenova-u1-fast": true
+    "sensenova-u1-fast": true,
+    "meta/llama-3.2-11b-vision-instruct": true,
+    "nvidia/nemotron-nano-12b-v2-vl": true,
+    "nvidia/llama-3.1-nemotron-nano-vl-8b-v1": true,
+    "OpenGVLab/InternVL3_5-241B-A28B": true,
+    "Qwen/Qwen3-VL-8B-Thinking": true,
+    "Qwen/Qwen3-VL-8B-Instruct": true,
+    "PaddlePaddle/ERNIE-4.5-VL-28B-A3B-PT": true
   },
   "non_chat_keywords": [
     "embed",

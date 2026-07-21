@@ -3,6 +3,7 @@ import asyncio
 import time
 import os
 import logging
+import hashlib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -48,7 +49,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.6.0"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -1044,6 +1045,15 @@ _announcement_cache = {"content": None, "ts": 0}
 ANNOUNCEMENT_TTL = 300
 
 
+def _content_hash(content: str) -> str:
+    """计算内容 MD5 指纹，用于前端检测公告变动"""
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+
+def _announce_response(ok: bool, content: str) -> dict:
+    return {"ok": ok, "content": content, "hash": _content_hash(content)}
+
+
 @app.get("/api/announcement")
 async def get_announcement(_=Depends(verify_admin)):
     """优先读 config.json 的 announcement_url（如 Gitee raw 链接）远程抓取；
@@ -1052,7 +1062,7 @@ async def get_announcement(_=Depends(verify_admin)):
     url = cfg.get("announcement_url") or DEFAULT_ANNOUNCEMENT_URL
     now = time.time()
     if _announcement_cache["content"] is not None and now - _announcement_cache["ts"] < ANNOUNCEMENT_TTL:
-        return {"ok": True, "content": _announcement_cache["content"]}
+        return _announce_response(True, _announcement_cache["content"])
     # 远程抓取
     try:
         resp = await http_client.get(url, timeout=10, follow_redirects=True)
@@ -1065,7 +1075,7 @@ async def get_announcement(_=Depends(verify_admin)):
                 atomic_write(ANNOUNCEMENT_CACHE_FILE, json.dumps({"content": content, "ts": now}, ensure_ascii=False))
             except Exception:
                 logger.warning("write announcement cache file failed")
-            return {"ok": True, "content": content}
+            return _announce_response(True, content)
     except Exception:
         logger.warning("fetch remote announcement failed: %s", url)
     # 远程失败：读本地缓存文件（上次成功抓取的内容）
@@ -1073,17 +1083,176 @@ async def get_announcement(_=Depends(verify_admin)):
         try:
             data = json.loads(ANNOUNCEMENT_CACHE_FILE.read_text(encoding="utf-8"))
             if data.get("content"):
-                return {"ok": True, "content": data["content"]}
+                return _announce_response(True, data["content"])
         except Exception:
             pass
     # 最终兜底：默认 announcement.json
     if ANNOUNCEMENT_FILE.exists():
         try:
             data = json.loads(ANNOUNCEMENT_FILE.read_text(encoding="utf-8"))
-            return {"ok": True, "content": data.get("content", "")}
+            return _announce_response(True, data.get("content", ""))
         except Exception:
             logger.exception("parse announcement.json failed")
-    return {"ok": False, "content": "暂无公告内容。"}
+    return _announce_response(False, "暂无公告内容。")
+
+
+# ---------- 在线更新 ----------
+VERSION_CHECK_URL = "https://gitee.com/ywtc000/dongye/raw/master/version.json"
+_update_download_state = {
+    "downloading": False,
+    "progress": 0,
+    "total": 0,
+    "done": False,
+    "error": None,
+    "file": None,
+}
+
+
+def _version_gt(a: str, b: str) -> bool:
+    """比较版本号 a > b"""
+    try:
+        pa = [int(x) for x in a.split(".")]
+        pb = [int(x) for x in b.split(".")]
+        while len(pa) < len(pb):
+            pa.append(0)
+        while len(pb) < len(pa):
+            pb.append(0)
+        return pa > pb
+    except Exception:
+        return a.strip() != b.strip()
+
+
+def _cleanup_old_exe():
+    """启动时清理上次更新遗留的 .old 文件"""
+    old_path = sys.executable + ".old"
+    if os.path.exists(old_path):
+        try:
+            os.remove(old_path)
+        except Exception:
+            pass
+
+
+@app.get("/api/check-update")
+async def check_update(_=Depends(verify_admin)):
+    """检查 gitee 是否有新版本"""
+    cfg = load_config()
+    url = cfg.get("version_check_url") or VERSION_CHECK_URL
+    try:
+        resp = await http_client.get(url, timeout=10, follow_redirects=True)
+        if resp.status_code == 200:
+            data = resp.json()
+            if not isinstance(data, dict):
+                return {"ok": False, "error": "版本信息格式错误"}
+            latest_ver = data.get("version", "")
+            has_update = _version_gt(latest_ver, APP_VERSION)
+            min_ver = data.get("min_version", "")
+            force_update = bool(min_ver and _version_gt(min_ver, APP_VERSION))
+            return {
+                "ok": True,
+                "current": APP_VERSION,
+                "latest": latest_ver,
+                "has_update": has_update,
+                "force_update": force_update,
+                "download_url": data.get("download_url", ""),
+                "release_notes": data.get("release_notes", ""),
+                "min_version": min_ver,
+            }
+    except Exception as e:
+        logger.warning("check update failed: %s", e)
+    return {"ok": False, "error": "无法连接更新服务器"}
+
+
+@app.post("/api/start-download")
+async def start_download(data: dict, _=Depends(verify_admin)):
+    """启动后台下载新版 exe，返回后通过 /api/download-progress 轮询进度"""
+    url = data.get("url", "")
+    if not url:
+        return {"ok": False, "error": "缺少下载地址"}
+    if _update_download_state["downloading"]:
+        return {"ok": False, "error": "正在下载中，请稍候"}
+    _update_download_state.update({
+        "downloading": True, "progress": 0, "total": 0,
+        "done": False, "error": None, "file": None,
+    })
+    asyncio.create_task(_do_download(url))
+    return {"ok": True}
+
+
+async def _do_download(url: str):
+    """后台下载任务，流式写入临时文件，实时更新进度"""
+    import tempfile
+    # 只取临时文件名，不保持句柄（Windows 下未关闭的句柄会导致后续 open 失败）
+    fd, tmp_path = tempfile.mkstemp(suffix=".exe", dir=DATA_DIR)
+    os.close(fd)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=15)) as client:
+            async with client.stream("GET", url, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    _update_download_state["error"] = f"下载失败: HTTP {resp.status_code}"
+                    _update_download_state["downloading"] = False
+                    return
+                content_length = resp.headers.get("content-length")
+                total = int(content_length) if content_length else 0
+                _update_download_state["total"] = total
+                downloaded = 0
+                with open(tmp_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            _update_download_state["progress"] = round(downloaded / total * 100, 1)
+        _update_download_state["done"] = True
+        _update_download_state["file"] = tmp_path
+        _update_download_state["downloading"] = False
+    except Exception as e:
+        _update_download_state["error"] = str(e)
+        _update_download_state["downloading"] = False
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+@app.get("/api/download-progress")
+async def download_progress(_=Depends(verify_admin)):
+    """返回当前下载进度"""
+    return {"ok": True, **{k: v for k, v in _update_download_state.items()}}
+
+
+@app.post("/api/apply-update")
+async def apply_update(_=Depends(verify_admin)):
+    """应用更新：替换 exe 并重启"""
+    if not getattr(sys, 'frozen', False):
+        return {"ok": False, "error": "开发模式下不支持热更新，请打包后使用"}
+    if not _update_download_state["done"] or not _update_download_state["file"]:
+        return {"ok": False, "error": "没有可应用的更新"}
+    new_file = _update_download_state["file"]
+    if not os.path.exists(new_file):
+        return {"ok": False, "error": "更新文件不存在"}
+    try:
+        _do_swap_and_restart(new_file)
+    except Exception as e:
+        return {"ok": False, "error": f"更新失败: {e}"}
+    return {"ok": True}
+
+
+def _do_swap_and_restart(new_exe: str):
+    """重命名当前 exe → 替换新 exe → 启动新进程 → 退出当前进程"""
+    import subprocess
+    current_exe = sys.executable
+    old_exe = current_exe + ".old"
+    # 1. 删除旧残留
+    if os.path.exists(old_exe):
+        os.remove(old_exe)
+    # 2. 当前 exe 改名为 .old（运行中的 exe 可以改名不能删）
+    os.rename(current_exe, old_exe)
+    # 3. 新 exe 移到当前 exe 位置
+    os.rename(new_exe, current_exe)
+    # 4. 启动新 exe
+    creationflags = 0x00000008 if sys.platform == "win32" else 0  # DETACHED_PROCESS
+    subprocess.Popen([current_exe], close_fds=True, creationflags=creationflags)
+    # 5. 退出
+    os._exit(0)
 
 
 @app.get("/api/providers")
@@ -1109,7 +1278,6 @@ async def list_providers(_=Depends(verify_admin)):
 
 @app.post("/api/providers")
 async def add_provider(data: ProviderIn, _=Depends(verify_admin)):
-    import re
     if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_.\-]+$', data.name):
         raise HTTPException(400, "名称只能包含中文、字母、数字、横杠(-)、下划线(_)、点(.)，不能含斜杠/空格等特殊字符")
     # 校验 key 有效性（保存前强制校验）
@@ -1189,12 +1357,18 @@ async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
         for plat_name, plat_cfg in platforms.items():
             key = (keys.get(plat_name) or "").strip()
             if not key:
-                # 没填 Key：如果已有同名 provider，跳过保留原配置；否则标记未配置
+                # 没填 Key：如果已有同名 provider，用已有 key 重新拉模型（确保预设新增的模型生效）
                 if plat_name in existing_names:
-                    results[plat_name] = {"ok": True, "detail": "保留已有配置（未填写新 Key）"}
+                    existing = next((p for p in providers if p["name"] == plat_name), None)
+                    if existing and existing.get("api_key"):
+                        key = existing["api_key"]
+                        # 继续往下执行（复用已有 key 重新拉模型）
+                    else:
+                        results[plat_name] = {"ok": True, "detail": "保留已有配置（无可用 Key）"}
+                        continue
                 else:
                     results[plat_name] = {"ok": False, "detail": "未填写 Key"}
-                continue
+                    continue
             # 校验 key
             vr = await verify_provider_key_impl(plat_cfg["base_url"], key)
             if not vr["ok"]:
@@ -1228,17 +1402,10 @@ async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
             created_names.append(plat_name)
             results[plat_name] = {"ok": True, "detail": f"已配置 {len(models)} 个模型"}
         save_providers(providers)
-        # 合并路由组（去重，不覆盖已有成员）
+        # 预设路由组覆盖（预设有的组完全替换为模板，预设没的组保留不动）
         preset_routers = preset.get("routers", {})
         for gname, members in preset_routers.items():
-            if gname in ROUTERS:
-                existing = set(ROUTERS[gname])
-                for m in members:
-                    if m not in existing:
-                        ROUTERS[gname].append(m)
-                        existing.add(m)
-            else:
-                ROUTERS[gname] = list(members)
+            ROUTERS[gname] = list(members)
         save_routers()
     return {"ok": True, "results": results, "created": created_names}
 
@@ -1360,6 +1527,9 @@ BUILTIN_PRESET = {
                 "nvidia/nemotron-3-ultra-550b-a55b",
                 "qwen/qwen3.5-122b-a10b",
                 "z-ai/glm-5.2",
+                "meta/llama-3.2-11b-vision-instruct",
+                "nvidia/nemotron-nano-12b-v2-vl",
+                "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
             ],
         },
         "SenseNova": {
@@ -1383,6 +1553,10 @@ BUILTIN_PRESET = {
                 "Qwen/Qwen3.5-397B-A17B",
                 "deepseek-ai/DeepSeek-V4-Flash",
                 "deepseek-ai/DeepSeek-V4-Pro",
+                "OpenGVLab/InternVL3_5-241B-A28B",
+                "Qwen/Qwen3-VL-8B-Thinking",
+                "Qwen/Qwen3-VL-8B-Instruct",
+                "PaddlePaddle/ERNIE-4.5-VL-28B-A3B-PT",
             ],
         },
     },
@@ -1411,6 +1585,13 @@ BUILTIN_PRESET = {
             "sensenova-6.7-flash-lite",
             "mistralai/mistral-large-3-675b-instruct-2512",
             "mistralai/mistral-small-4-119b-2603",
+            "meta/llama-3.2-11b-vision-instruct",
+            "nvidia/nemotron-nano-12b-v2-vl",
+            "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+            "OpenGVLab/InternVL3_5-241B-A28B",
+            "Qwen/Qwen3-VL-8B-Thinking",
+            "Qwen/Qwen3-VL-8B-Instruct",
+            "PaddlePaddle/ERNIE-4.5-VL-28B-A3B-PT",
         ],
     },
 }
@@ -1441,146 +1622,43 @@ async def load_preset(force_remote: bool = False) -> dict:
     return _preset_cache["data"]
 
 
-# ============================================================
-# 识图两阶段：含图片请求 → 视觉模型转文字 → 转交原路由组
-# ============================================================
-VISION_DESC_PROMPT = (
-    "请极其详细客观地描述这张图片的所有可见内容，包括：所有可见文字（逐字转录，保留原始格式与标点）、"
-    "人物/物体/场景、颜色/布局/位置关系、图表数据/坐标轴/数值、任何对理解图片有用的细节。"
-    "客观描述，不要解读或猜测。直接输出描述内容，不要加'这张图片显示了'之类的前缀。"
-    "请使用简体中文输出描述。"
-)
-
-
 def has_image(body: dict) -> bool:
-    """检测 messages 是否含 image_url（OpenAI 多模态格式）"""
-    for msg in body.get("messages", []):
-        content = msg.get("content")
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "image_url":
-                    return True
+    """检测 messages 是否含 image_url（仅看最后一轮 user 消息，历史图片不算）"""
+    msgs = body.get("messages", [])
+    for i in range(len(msgs) - 1, -1, -1):
+        msg = msgs[i]
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = msg.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        return True
+            return False  # 最后一轮 user 消息没有图，不再往前看
     return False
 
 
-async def describe_one_image(image_url: str) -> str | None:
-    """调识图路由组的视觉模型，把图片转成文字描述。失败返回 None。"""
-    candidates = []
-    if "识图" in ROUTERS:
-        candidates = pick_available_models("识图", force=True)
-    if not candidates:
-        # 退而求其次：全局找支持视觉的模型
-        for p in providers:
-            for m in get_enabled_models(p):
-                if is_vision_model(m):
-                    k = f"{p['name']}||{m}"
-                    if not is_circuit_open(k):
-                        candidates.append((p, m))
-    if not candidates:
-        return None
-    for provider, model in candidates:
-        k = f"{provider['name']}||{model}"
-        url = provider["base_url"].rstrip("/") + "/chat/completions"
-        payload = {
-            "model": MODEL_ALIASES.get(model, model),
-            "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": image_url}},
-                {"type": "text", "text": VISION_DESC_PROMPT},
-            ]}],
-            "stream": False,
-            "max_tokens": 2000,
-        }
-        headers = {"Authorization": f"Bearer {provider['api_key']}", "Content-Type": "application/json"}
-        try:
-            resp = await http_client.post(url, json=payload, headers=headers, timeout=30)
-            if resp.status_code == 200:
-                try:
-                    content = resp.json()["choices"][0]["message"]["content"]
-                    if isinstance(content, str) and content.strip():
-                        record_success(k)
-                        return content.strip()
-                    else:
-                        logger.warning("empty vision response from %s", provider["name"])
-                        record_fail(k)
-                        continue
-                except (KeyError, IndexError, TypeError):
-                    record_fail(k)
-                    continue
-            logger.warning("vision describe failed %d from %s", resp.status_code, provider["name"])
-            record_fail(k)
-        except Exception:
-            logger.warning("vision describe error to %s", provider["name"])
-            record_fail(k)
-            continue
-    return None
+CN_HINT = "（请用简体中文回答）"
 
-
-async def describe_images(body: dict) -> tuple[dict, bool, list[str]]:
-    """把 body 里的图片替换成文字描述。
-    只识别最后一条 user 消息里的图片（避免多轮对话历史图片反复识别）；
-    历史消息里的图片替换为提示文字，不重新识别。
-    返回 (改造后的 body, 是否全部成功, 各图片描述摘要列表)。"""
-    if not has_image(body):
-        return body, True, []
-    new_body = copy.deepcopy(body)
-    messages = new_body.get("messages", [])
-
-    # 找到最后一条 user 消息的索引
-    last_user_idx = -1
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], dict) and messages[i].get("role") == "user":
-            last_user_idx = i
+def _inject_cn_hint(body: dict):
+    """将中文回复指令注入最后一条 user 消息，确保识图模型用中文回答。
+    部分小模型会忽略 system prompt，直接塞进用户消息最可靠。"""
+    msgs = body.get("messages")
+    if not isinstance(msgs, list):
+        return
+    for i in range(len(msgs) - 1, -1, -1):
+        msg = msgs[i]
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = msg.get("content")
+            if isinstance(content, str) and CN_HINT not in content:
+                msg["content"] = content + "\n" + CN_HINT
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        t = part.get("text", "")
+                        if CN_HINT not in t:
+                            part["text"] = t + "\n" + CN_HINT
+                        break
             break
-
-    # 只收集最后一条 user 消息里的图片 URL
-    img_urls = []
-    if last_user_idx >= 0:
-        content = messages[last_user_idx].get("content")
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "image_url":
-                    iu = part.get("image_url")
-                    img_url = iu.get("url", "") if isinstance(iu, dict) else ""
-                    img_urls.append(img_url)
-
-    # 并发识别最新消息的图片，保持顺序
-    descs = list(await asyncio.gather(
-        *[describe_one_image(u) if u else asyncio.sleep(0, result=None) for u in img_urls]
-    )) if img_urls else []
-
-    # 回填：最后一条 user 消息用识别结果，历史消息的图片替换为提示
-    summaries = []
-    all_ok = True
-    desc_idx = 0
-    for i, msg in enumerate(messages):
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        new_parts = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "image_url":
-                iu = part.get("image_url")
-                img_url = iu.get("url", "") if isinstance(iu, dict) else ""
-                if not img_url:
-                    new_parts.append(part)
-                    continue
-                if i == last_user_idx:
-                    # 最新消息的图片：用识别结果
-                    desc = descs[desc_idx] if desc_idx < len(descs) else None
-                    desc_idx += 1
-                    if desc:
-                        new_parts.append({"type": "text", "text": f"【图片内容】{desc}"})
-                        summaries.append(desc[:80])
-                    else:
-                        new_parts.append({"type": "text", "text": "【图片内容】（识别失败）"})
-                        all_ok = False
-                else:
-                    # 历史消息的图片：不重新识别，替换为提示
-                    new_parts.append({"type": "text", "text": "【图片内容】（历史图片）"})
-            else:
-                new_parts.append(part)
-        msg["content"] = new_parts
-    return new_body, all_ok, summaries
 
 
 # ============================================================
@@ -1716,24 +1794,23 @@ async def proxy_chat(request: Request, force: bool = False):
     body = ensure_lang_reply(body)
     requested_model = body.get("model")
 
-    # 识图两阶段：含图片且目标非识图组/识图模型 → 先用视觉模型转文字再交原路由组
+    # 识图辅助：含图片且目标非识图组/识图模型 → 直接转交识图路由组
     vision_cfg = app_config.get("vision_assist", {})
     vision_enabled = vision_cfg.get("enabled", False) if isinstance(vision_cfg, dict) else False
     is_vision_request = (requested_model == "识图") or bool(requested_model and is_vision_model(requested_model))
     vision_prelude = ""
     if vision_enabled and has_image(body) and not is_vision_request:
-        new_body, ok, summaries = await describe_images(body)
-        if ok:
-            body = new_body
-            if summaries:
-                vision_prelude = "🖼️ 已识别图片内容，正在生成回复…\n\n"
+        if "识图" in ROUTERS:
+            requested_model = "识图"
+            vision_prelude = "🖼️ 已切换到视觉模型回复…\n\n"
+            # 识图模型 max_tokens 上限较低（部分仅 32768），避免客户端传的百万级值导致 upstream 400
+            for key in ("max_tokens", "max_completion_tokens"):
+                if body.get(key, 0) > 16384:
+                    body[key] = 16384
+            # 部分识图模型忽略 system prompt，把中文指令直接注入用户消息末尾
+            _inject_cn_hint(body)
         else:
-            # 识图失败 → 降级直接走识图组（保证用户至少有回答）
-            if "识图" in ROUTERS:
-                requested_model = "识图"
-                vision_prelude = "⚠️ 图片识别失败，已降级由视觉模型直接回复。\n\n"
-            else:
-                vision_prelude = "⚠️ 图片识别失败且无可用视觉模型，可能无法处理图片。\n\n"
+            raise HTTPException(503, "识图辅助已开启，但未配置识图路由组，无法处理图片。")
 
     candidates = pick_available_models(requested_model, force=force)
     if not candidates:
@@ -1870,6 +1947,9 @@ if __name__ == "__main__":
     from PIL import Image, ImageDraw
     import pystray
     import msvcrt
+
+    # ---- 清理上次更新的残留文件 ----
+    _cleanup_old_exe()
 
     # ---- 单实例限制 ----
     # 真实客户端（打包 exe）：已运行则弹窗提示并退出，不允许重复打开。
