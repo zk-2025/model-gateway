@@ -25,4 +25,3 @@ echo [启动] 使用虚拟环境运行项目...
 echo.
 venv\Scripts\python app.py
 
-pause

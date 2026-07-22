@@ -71,18 +71,44 @@ def atomic_write(path: Path, content: str):
 
 
 # ============================================================
+# 配置说明（写入 config.json 作为备注）
+# ============================================================
+CONFIG_NOTE = (
+    "========== 使用说明 ==========\n"
+    "【三种模式切换】\n"
+    "  🔒 安全模式（默认）：删除 local_api_key 整个字段，重启后自动生成随机 Key\n"
+    "  🔓 开放模式：将 local_api_key 的值设为空字符串 \"\"，任意 API Key 均可通信\n"
+    "  🔒 自定义 Key：在 local_api_key 中填入你的密钥，必须匹配才能通信\n"
+    "【端口配置】\n"
+    "  修改 port 字段即可，默认 8000\n"
+    "=============================="
+)
+
+
+# ============================================================
 # 配置加载
 # ============================================================
 def load_config():
     if CONFIG_FILE.exists():
         cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         cfg.setdefault("port", 8000)
+        cfg.setdefault("_note", CONFIG_NOTE)
+        # 三种模式：
+        # ① local_api_key 字段不存在 → 自动生成随机 Key（安全模式）
+        # ② local_api_key 为空字符串 "" → 开放模式（任意 Key 放行）
+        # ③ local_api_key 有具体值 → 安全模式（必须匹配）
+        if "local_api_key" not in cfg:
+            cfg["local_api_key"] = "sk-local-" + secrets.token_hex(16)
+            atomic_write(CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
+        elif not cfg["local_api_key"]:
+            cfg["local_api_key"] = None
         return cfg
     data = {
+        "_note": CONFIG_NOTE,
         "local_api_key": "sk-local-" + secrets.token_hex(16),
         "port": 8000,
     }
-    atomic_write(CONFIG_FILE, json.dumps(data, indent=2))
+    atomic_write(CONFIG_FILE, json.dumps(data, ensure_ascii=False, indent=2))
     return data
 
 
@@ -164,6 +190,9 @@ security = HTTPBearer(auto_error=False)
 
 def verify_client(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """客户端调用 /v1/* 的鉴权"""
+    # 未配置 API Key 时，接受任意 Key（开放模式）
+    if not LOCAL_API_KEY:
+        return credentials
     if not credentials or credentials.credentials != LOCAL_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API Key")
     return credentials
@@ -171,6 +200,9 @@ def verify_client(credentials: HTTPAuthorizationCredentials = Depends(security))
 
 def verify_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """管理面板调用 /api/* 的鉴权，直接使用 local_api_key"""
+    # 未配置 API Key 时，接受任意 Key（开放模式）
+    if not LOCAL_API_KEY:
+        return credentials
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing credentials")
     if credentials.credentials != LOCAL_API_KEY:
