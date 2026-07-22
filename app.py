@@ -75,9 +75,12 @@ def atomic_write(path: Path, content: str):
 # ============================================================
 def load_config():
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        cfg.setdefault("port", 8000)
+        return cfg
     data = {
         "local_api_key": "sk-local-" + secrets.token_hex(16),
+        "port": 8000,
     }
     atomic_write(CONFIG_FILE, json.dumps(data, indent=2))
     return data
@@ -1982,10 +1985,11 @@ if __name__ == "__main__":
             pass
         return False
 
+    SERVER_PORT = app_config.get("port", 8000)
     AUTO_KILL = os.environ.get("GATEWAY_AUTO_KILL") == "1"
 
-    if AUTO_KILL and port_in_use(8000):
-        kill_old_instance(8000)
+    if AUTO_KILL and port_in_use(SERVER_PORT):
+        kill_old_instance(SERVER_PORT)
         time.sleep(1.5)
 
     # 文件锁：真实客户端靠它拦截重复启动；测试模式端口已清，锁也能正常获取
@@ -2038,7 +2042,7 @@ if __name__ == "__main__":
 
     # ---- FastAPI 服务器（daemon 线程，主进程退出时自动结束） ----
     def start_server():
-        uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+        uvicorn.run(app, host="127.0.0.1", port=SERVER_PORT, log_level="warning")
 
     t = threading.Thread(target=start_server, daemon=True)
     t.start()
@@ -2048,7 +2052,7 @@ if __name__ == "__main__":
 
     # ---- 创建原生的桌面窗口 ----
     window = webview.create_window(
-        '无限额度监控网关', 'http://127.0.0.1:8000/', width=1200, height=800
+        '无限额度监控网关', f'http://127.0.0.1:{SERVER_PORT}/', width=1200, height=800
     )
     state["window"] = window
 
