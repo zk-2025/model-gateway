@@ -1890,17 +1890,34 @@ function renderRouterModels() {
 function onRouterModelToggle() {
   // 先同步当前可见 DOM 的勾选状态到 routersData，保留被筛选遮挡的模型状态
   if (currentRouterName && routersData[currentRouterName] !== undefined) {
-    const currentSelected = new Set(routersData[currentRouterName] || []);
-    document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
-      if (cb.checked) currentSelected.add(cb.value);
-      else currentSelected.delete(cb.value);
+    // 统计可见列表中每个模型名当前的勾选次数（处理重复模型名）
+    const checkedCount = {};
+    document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]:checked`).forEach(cb => {
+      checkedCount[cb.value] = (checkedCount[cb.value] || 0) + 1;
     });
-    routersData[currentRouterName] = Array.from(currentSelected);
+    // 对于被筛选遮挡的模型，保留其原有的勾选次数
+    const hiddenCount = {};
+    routersData[currentRouterName].forEach(m => {
+      // 只有不在可见列表中的模型才保留
+      if (!document.querySelector(`.router-model-cb[data-router="${currentRouterName}"][value="${m}"]`)) {
+        hiddenCount[m] = (hiddenCount[m] || 0) + 1;
+      }
+    });
+    // 合并可见和隐藏的勾选结果
+    const merged = {};
+    Object.keys(checkedCount).forEach(k => merged[k] = (merged[k] || 0) + checkedCount[k]);
+    Object.keys(hiddenCount).forEach(k => merged[k] = (merged[k] || 0) + hiddenCount[k]);
+    // 按次数展开为列表
+    const result = [];
+    Object.keys(merged).forEach(model => {
+      for (let i = 0; i < merged[model]; i++) result.push(model);
+    });
+    routersData[currentRouterName] = result;
   }
   // 仅更新计数，不重新渲染整个列表（避免丢失勾选焦点）
-  const selected = new Set(routersData[currentRouterName] || []);
+  const uniqueCount = new Set(routersData[currentRouterName] || []).size;
   const totalCount = allModelOptions.length;
-  document.getElementById('routerModelCount').textContent = `已选 ${selected.size} 个 · 显示 ${totalCount}/${totalCount} 个模型`;
+  document.getElementById('routerModelCount').textContent = `已选 ${uniqueCount} 个模型 · 显示 ${totalCount}/${totalCount} 个`;
 }
 
 function selectAllRouterModels(selectAll) {
@@ -1926,24 +1943,34 @@ function addRouterGroup() {
 }
 
 async function saveRouters() {
-  // 先同步当前可见 DOM 的勾选状态到 routersData（覆盖筛选后可见的模型）
-  document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
-    const router = cb.dataset.router;
-    if (!routersData[router]) routersData[router] = [];
-  });
-  // 用当前可见的 checkbox 更新 routersData 中对应模型的勾选状态
-  const visibleChecked = [];
+  // 确保 routersData 有当前路由组的条目
+  if (!routersData[currentRouterName]) routersData[currentRouterName] = [];
+
+  // 统计可见列表中每个模型名当前的勾选次数（处理重复模型名）
+  const visibleCount = {};
   document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]:checked`).forEach(cb => {
-    visibleChecked.push(cb.value);
+    visibleCount[cb.value] = (visibleCount[cb.value] || 0) + 1;
   });
-  // 保留未被筛选遮挡的模型状态，仅更新可见模型的勾选
-  const currentSelected = new Set(routersData[currentRouterName] || []);
-  // 从可见列表中移除已取消勾选的，添加新勾选的
-  document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
-    if (cb.checked) currentSelected.add(cb.value);
-    else currentSelected.delete(cb.value);
+
+  // 对于被筛选遮挡的模型，保留其原有的勾选次数
+  const hiddenCount = {};
+  routersData[currentRouterName].forEach(m => {
+    if (!document.querySelector(`.router-model-cb[data-router="${currentRouterName}"][value="${m}"]`)) {
+      hiddenCount[m] = (hiddenCount[m] || 0) + 1;
+    }
   });
-  routersData[currentRouterName] = Array.from(currentSelected);
+
+  // 合并可见和隐藏的勾选结果
+  const merged = {};
+  Object.keys(visibleCount).forEach(k => merged[k] = (merged[k] || 0) + visibleCount[k]);
+  Object.keys(hiddenCount).forEach(k => merged[k] = (merged[k] || 0) + hiddenCount[k]);
+
+  // 按次数展开为列表
+  const result = [];
+  Object.keys(merged).forEach(model => {
+    for (let i = 0; i < merged[model]; i++) result.push(model);
+  });
+  routersData[currentRouterName] = result;
   try {
     const r = await apiFetch('/api/routers', {
       method: 'POST',
