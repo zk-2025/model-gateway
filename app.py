@@ -1056,6 +1056,31 @@ async def get_usage(days: int = 1, _=Depends(verify_admin)):
     return {"days": days, "total": total, "by_day": by_day_list, "by_model": by_model_list}
 
 
+@app.get("/api/usage-logs")
+async def get_usage_logs(days: int = 1, _=Depends(verify_admin)):
+    """返回模型调用日志，含耗时和 TPS"""
+    days = max(1, min(days, MAX_USAGE_DAYS))
+    records = await read_usage(days)
+    # 按时间倒序排列
+    records.sort(key=lambda r: r.get("ts", 0), reverse=True)
+    logs = []
+    for r in records:
+        ts = r.get("ts", 0)
+        dur = r.get("duration", 0)
+        tps = r.get("tps", 0)
+        logs.append({
+            "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+            "provider": r.get("provider", "unknown"),
+            "model": r.get("model", "unknown"),
+            "pt": r.get("pt", 0),
+            "ct": r.get("ct", 0),
+            "tt": r.get("tt", 0),
+            "duration": dur,
+            "tps": tps,
+        })
+    return {"days": days, "total": len(logs), "logs": logs}
+
+
 @app.get("/api/model-details")
 async def get_model_details(_=Depends(verify_admin)):
     merged = {}
@@ -1767,7 +1792,7 @@ def _inject_cn_hint(body: dict):
 # ============================================================
 # 代理（客户端鉴权）
 # ============================================================
-async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
+async def _stream_with_failover(candidates, body, is_router, prelude: str = "", start_time: float = 0):
     """流式转发，中断时自动切换下一个候选模型继续输出。prelude 为先输出给用户的提示文本。"""
 
     async def gen():
@@ -1860,10 +1885,14 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     try:
                         pt = (usage_obj or {}).get("prompt_tokens", 0) or 0
                         ct = (usage_obj or {}).get("completion_tokens", 0) or 0
+                        tt = pt + ct
+                        dur = time.time() - start_time if start_time else 0
                         await append_usage({
                             "ts": time.time(), "model": model,
                             "provider": provider["name"],
-                            "pt": pt, "ct": ct, "tt": pt + ct,
+                            "pt": pt, "ct": ct, "tt": tt,
+                            "duration": round(dur, 2),
+                            "tps": round(ct / dur, 2) if dur > 0 and ct > 0 else 0,
                         })
                     except Exception:
                         logger.exception("append_usage(stream) failed")
@@ -1919,12 +1948,13 @@ async def proxy_chat(request: Request, force: bool = False):
     if not candidates:
         raise HTTPException(503, f"无可用的模型: {requested_model or '任意'}")
 
+    _start_time = time.time()
     is_router = requested_model in ROUTERS
     stream = body.get("stream", False)
     last_err = None
 
     if stream:
-        return await _stream_with_failover(candidates, body, is_router, prelude=vision_prelude)
+        return await _stream_with_failover(candidates, body, is_router, prelude=vision_prelude, start_time=_start_time)
 
     for attempt in (2,) if is_router else (1,):
         for provider, model in candidates:
@@ -1956,10 +1986,14 @@ async def proxy_chat(request: Request, force: bool = False):
                         u = parsed.get("usage") or {}
                         pt = u.get("prompt_tokens", 0) or 0
                         ct = u.get("completion_tokens", 0) or 0
+                        tt = pt + ct
+                        dur = time.time() - _start_time if '_start_time' in dir() else 0
                         await append_usage({
                             "ts": time.time(), "model": model,
                             "provider": provider["name"],
-                            "pt": pt, "ct": ct, "tt": pt + ct,
+                            "pt": pt, "ct": ct, "tt": tt,
+                            "duration": round(dur, 2),
+                            "tps": round(ct / dur, 2) if dur > 0 and ct > 0 else 0,
                         })
                     except Exception:
                         logger.exception("append_usage(non-stream) failed")

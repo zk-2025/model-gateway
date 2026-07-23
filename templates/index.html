@@ -641,6 +641,7 @@ input:checked + .slider:before { transform: translateX(14px); }
         <div class="main-tabs" style="display: flex; gap: 6px; background: rgba(0,0,0,0.04); padding: 4px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.05);">
           <button id="tab-monitor" class="btn" onclick="switchMainTab('monitor')" style="border: none; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); background: var(--mac-window-bg); color: var(--text-primary);">实时监控</button>
           <button id="tab-usage" class="btn" onclick="switchMainTab('usage')" style="border: none; font-weight: 500; box-shadow: none; background: transparent; color: var(--text-secondary);">消耗统计</button>
+          <button id="tab-log" class="btn" onclick="switchMainTab('log')" style="border: none; font-weight: 500; box-shadow: none; background: transparent; color: var(--text-secondary);">调用日志</button>
         </div>
       </div>
       <div style="display: flex; gap: 12px;">
@@ -764,6 +765,36 @@ input:checked + .slider:before { transform: translateX(14px); }
       </table>
     </div>
     </div> <!-- end usage-view -->
+
+    <div id="log-view" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; margin-top: 8px;">
+      <h2 style="font-size: 16px; font-weight: 600;">📋 调用日志</h2>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-primary log-tab" data-days="1" onclick="switchLogTab(1)">近24小时</button>
+        <button class="btn log-tab" data-days="7" onclick="switchLogTab(7)">近 7 天</button>
+        <button class="btn log-tab" data-days="30" onclick="switchLogTab(30)">近 30 天</button>
+      </div>
+    </div>
+    <div class="table-container" style="max-height: 60vh; overflow-y: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th width="150">时间</th>
+            <th width="100">提供商</th>
+            <th>模型</th>
+            <th width="80">输入Token</th>
+            <th width="80">输出Token</th>
+            <th width="80">合计Token</th>
+            <th width="100">耗时(秒)</th>
+            <th width="90">TPS</th>
+          </tr>
+        </thead>
+        <tbody id="logBody">
+          <tr><td colspan="8" class="empty">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    </div> <!-- end log-view -->
   </div>
 </div>
 
@@ -786,20 +817,48 @@ input:checked + .slider:before { transform: translateX(14px); }
 
 <!-- Router Modal -->
 <div class="modal-overlay" id="routerModal" onclick="if(event.target===this) document.getElementById('routerModal').classList.remove('show')">
-  <div class="modal-content" style="max-width: 600px;">
+  <div class="modal-content" style="max-width: 900px; height: 85vh;">
     <div class="modal-header">
       <div class="modal-title">🔀 自定义路由配置</div>
       <div class="mac-btn close" onclick="document.getElementById('routerModal').classList.remove('show')" style="cursor: pointer;"></div>
     </div>
-    <div class="modal-body">
-      <div style="display:flex; gap:8px; margin-bottom:12px;">
-        <input type="text" id="newRouterName" placeholder="路由名称 (如 vip-router)" style="flex:1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--mac-border); background: transparent; color: var(--text-primary); font-size: 13px; outline: none;">
-        <button class="btn btn-primary" onclick="addRouterGroup()">+ 添加路由</button>
+    <div class="modal-body" style="display:flex; gap:16px; padding:16px 20px; overflow:hidden;">
+      <!-- 左侧：路由组列表 -->
+      <div style="width:260px; min-width:200px; display:flex; flex-direction:column; gap:8px; border-right:1px solid var(--mac-border); padding-right:12px;">
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="newRouterName" placeholder="路由名称" style="flex:1; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--mac-border); background: transparent; color: var(--text-primary); font-size: 13px; outline: none;">
+          <button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="addRouterGroup()">+ 添加</button>
+        </div>
+        <div id="routerGroupList" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px;"></div>
       </div>
-      <div id="routerListContainer" style="display:flex; flex-direction:column; gap:12px; max-height:400px; overflow-y:auto;">
-      </div>
-      <div style="margin-top:16px; display:flex; justify-content:flex-end;">
-        <button class="btn btn-primary" onclick="saveRouters()">保存所有路由</button>
+      <!-- 右侧：模型列表 -->
+      <div style="flex:1; display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <div style="font-weight:600;font-size:14px;" id="routerSelectedTitle">请选择一个路由组</div>
+          <div style="flex:1;"></div>
+          <button class="btn" style="padding:3px 8px;font-size:11px;color:var(--danger);display:none;" id="deleteRouterBtn" onclick="deleteCurrentRouter()">删除路由组</button>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <select id="routerStatusFilter" onchange="renderRouterModels()" style="padding:4px 8px;border-radius:6px;border:1px solid var(--mac-border);background:transparent;color:var(--text-primary);font-size:12px;outline:none;">
+            <option value="all">全部状态</option>
+            <option value="high">可用率高 (≥90%)</option>
+            <option value="mid">存在波动 (50%-90%)</option>
+            <option value="low">服务异常 (<50%)</option>
+          </select>
+          <select id="routerProviderFilter" onchange="renderRouterModels()" style="padding:4px 8px;border-radius:6px;border:1px solid var(--mac-border);background:transparent;color:var(--text-primary);font-size:12px;outline:none;">
+            <option value="all">全部提供商</option>
+          </select>
+          <input type="text" id="routerSearchInput" placeholder="搜索模型..." oninput="renderRouterModels()" style="flex:1;min-width:100px;padding:4px 8px;border-radius:6px;border:1px solid var(--mac-border);background:transparent;color:var(--text-primary);font-size:12px;outline:none;">
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);" id="routerModelCount"></div>
+        <div id="routerModelList" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; border:1px solid var(--mac-border); border-radius:8px; padding:8px; background:rgba(255,255,255,0.3);">
+          <div class="empty">请选择一个路由组</div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; padding-top:4px;">
+          <button class="btn" onclick="selectAllRouterModels(true)" style="font-size:12px;">全选</button>
+          <button class="btn" onclick="selectAllRouterModels(false)" style="font-size:12px;">取消全选</button>
+          <button class="btn btn-primary" onclick="saveRouters()" style="font-size:12px;">保存所有路由</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1580,40 +1639,69 @@ document.addEventListener('visibilitychange', () => {
 function switchMainTab(tab) {
   const monitorBtn = document.getElementById('tab-monitor');
   const usageBtn = document.getElementById('tab-usage');
+  const logBtn = document.getElementById('tab-log');
   const monitorView = document.getElementById('monitor-view');
   const usageView = document.getElementById('usage-view');
+  const logView = document.getElementById('log-view');
+  
+  const resetBtn = (btn) => { btn.style.background = 'transparent'; btn.style.boxShadow = 'none'; btn.style.color = 'var(--text-secondary)'; btn.style.fontWeight = '500'; };
+  const activeBtn = (btn) => { btn.style.background = 'var(--mac-window-bg)'; btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)'; btn.style.color = 'var(--text-primary)'; btn.style.fontWeight = '600'; };
+  
+  resetBtn(usageBtn); resetBtn(logBtn);
+  monitorView.style.display = 'none'; usageView.style.display = 'none'; logView.style.display = 'none';
   
   if (tab === 'monitor') {
-    monitorBtn.style.background = 'var(--mac-window-bg)';
-    monitorBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-    monitorBtn.style.color = 'var(--text-primary)';
-    monitorBtn.style.fontWeight = '600';
-    
-    usageBtn.style.background = 'transparent';
-    usageBtn.style.boxShadow = 'none';
-    usageBtn.style.color = 'var(--text-secondary)';
-    usageBtn.style.fontWeight = '500';
-    
+    activeBtn(monitorBtn);
     monitorView.style.display = 'block';
-    usageView.style.display = 'none';
-  } else {
-    usageBtn.style.background = 'var(--mac-window-bg)';
-    usageBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-    usageBtn.style.color = 'var(--text-primary)';
-    usageBtn.style.fontWeight = '600';
-    
-    monitorBtn.style.background = 'transparent';
-    monitorBtn.style.boxShadow = 'none';
-    monitorBtn.style.color = 'var(--text-secondary)';
-    monitorBtn.style.fontWeight = '500';
-    
-    monitorView.style.display = 'none';
+  } else if (tab === 'usage') {
+    activeBtn(usageBtn);
     usageView.style.display = 'block';
-    
-    if (document.getElementById('usageOverview').innerHTML === '') {
-      loadUsage();
-    }
+    if (document.getElementById('usageOverview').innerHTML === '') loadUsage();
+  } else if (tab === 'log') {
+    activeBtn(logBtn);
+    logView.style.display = 'block';
+    loadLogs();
   }
+}
+
+let logDays = 1;
+async function loadLogs() {
+  try {
+    const r = await apiFetch(`/api/usage-logs?days=${logDays}`);
+    const data = await r.json();
+    renderLogs(data);
+  } catch (e) {
+    if (e.message !== 'Unauthorized') console.error("Failed to load logs:", e);
+  }
+}
+function switchLogTab(days) {
+  logDays = days;
+  document.querySelectorAll('.log-tab').forEach(b => {
+    b.classList.toggle('btn-primary', Number(b.dataset.days) === days);
+  });
+  loadLogs();
+}
+function renderLogs(data) {
+  const rows = data.logs || [];
+  const tbody = document.getElementById('logBody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无调用记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const dur = r.duration ? r.duration.toFixed(2) : '--';
+    const tps = r.tps ? r.tps.toFixed(2) : '--';
+    return `<tr>
+      <td style="font-size:12px;white-space:nowrap;">${r.time}</td>
+      <td><span class="model-provider-badge">${r.provider}</span></td>
+      <td><div class="model-name">${r.model}</div></td>
+      <td>${r.pt}</td>
+      <td>${r.ct}</td>
+      <td>${r.tt}</td>
+      <td>${dur}</td>
+      <td>${tps}</td>
+    </tr>`;
+  }).join('');
 }
 
 /* ============ 路由配置 ============ */
@@ -1625,6 +1713,7 @@ function fmtCtx(n) {
 }
 let routersData = {};
 let allModelOptions = [];   // [{provider, model}]
+let currentRouterName = null; // 当前选中的路由组名
 
 async function loadVisionAssist() {
   try {
@@ -1654,16 +1743,23 @@ async function toggleVisionAssist(el) {
 async function openRouterManager() {
   document.getElementById('routerModal').classList.add('show');
   document.getElementById('newRouterName').value = '';
-  // 1. 拉取所有可用模型 + 模型详情（用于显示上下文长度）
+  currentRouterName = null;
+  // 1. 拉取所有可用模型 + 模型详情
   try {
     const r = await apiFetch('/api/providers');
     const list = await r.json();
     allModelOptions = [];
+    const providerSet = new Set();
     list.forEach(p => {
       (p.models || []).forEach(m => {
         allModelOptions.push({ provider: p.name, model: m });
+        providerSet.add(p.name);
       });
     });
+    // 填充提供商筛选下拉
+    const pf = document.getElementById('routerProviderFilter');
+    pf.innerHTML = '<option value="all">全部提供商</option>' +
+      Array.from(providerSet).sort().map(n => `<option value="${n}">${n}</option>`).join('');
   } catch (e) { if (e.message !== 'Unauthorized') console.error(e); }
   // 2. 拉取已保存的路由
   try {
@@ -1672,6 +1768,171 @@ async function openRouterManager() {
     routersData = d.data || {};
   } catch (e) { if (e.message !== 'Unauthorized') console.error(e); routersData = {}; }
   renderRouterList();
+  if (Object.keys(routersData).length > 0) {
+    selectRouterGroup(Object.keys(routersData)[0]);
+  }
+}
+
+function renderRouterList() {
+  const container = document.getElementById('routerGroupList');
+  const names = Object.keys(routersData);
+  if (names.length === 0) {
+    container.innerHTML = '<div class="empty" style="padding:12px;font-size:12px;">暂无路由组</div>';
+    return;
+  }
+  container.innerHTML = names.map(name => {
+    const count = (routersData[name] || []).length;
+    const active = name === currentRouterName ? ' background:var(--accent-primary);color:#fff;' : '';
+    return `<div onclick="selectRouterGroup('${name}')" style="cursor:pointer;padding:8px 10px;border-radius:6px;font-size:13px;${active}border:1px solid var(--mac-border);transition:all 0.15s;" onmouseover="this.style.background=this.style.background.includes('var(--accent)')?'':'var(--mac-border)'" onmouseout="this.style.background=this.style.background.includes('var(--accent)')?'':'transparent'">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span>🔀 ${name}</span>
+        <span style="font-size:11px;opacity:0.7;">${count} 模型</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectRouterGroup(name) {
+  currentRouterName = name;
+  renderRouterList();
+  document.getElementById('routerSelectedTitle').textContent = '🔀 ' + name;
+  document.getElementById('deleteRouterBtn').style.display = '';
+  renderRouterModels();
+}
+
+function deleteCurrentRouter() {
+  if (!currentRouterName || !confirm('确定删除路由组「' + currentRouterName + '」？')) return;
+  delete routersData[currentRouterName];
+  const keys = Object.keys(routersData);
+  currentRouterName = keys.length > 0 ? keys[0] : null;
+  renderRouterList();
+  if (currentRouterName) {
+    document.getElementById('routerSelectedTitle').textContent = '🔀 ' + currentRouterName;
+    renderRouterModels();
+  } else {
+    document.getElementById('routerSelectedTitle').textContent = '请选择一个路由组';
+    document.getElementById('deleteRouterBtn').style.display = 'none';
+    document.getElementById('routerModelList').innerHTML = '<div class="empty">请选择一个路由组</div>';
+    document.getElementById('routerModelCount').textContent = '';
+  }
+}
+
+function renderRouterModels() {
+  const container = document.getElementById('routerModelList');
+  const countEl = document.getElementById('routerModelCount');
+  if (!currentRouterName || !routersData[currentRouterName]) {
+    container.innerHTML = '<div class="empty">请选择一个路由组</div>';
+    countEl.textContent = '';
+    return;
+  }
+  if (allModelOptions.length === 0) {
+    container.innerHTML = '<div class="empty" style="color:var(--danger)">未获取到任何模型，请先配置上游提供商</div>';
+    countEl.textContent = '';
+    return;
+  }
+  const selected = new Set(routersData[currentRouterName] || []);
+  const filter = document.getElementById('routerStatusFilter').value;
+  const search = document.getElementById('routerSearchInput').value.toLowerCase();
+  const provider = document.getElementById('routerProviderFilter').value;
+
+  let filtered = allModelOptions.filter(opt => {
+    if (provider !== 'all' && opt.provider !== provider) return false;
+    if (search && !opt.model.toLowerCase().includes(search) && !opt.provider.toLowerCase().includes(search)) return false;
+    // 状态筛选：从 stabilityData 读取可用率
+    if (filter !== 'all') {
+      const sd = (stabilityData || []).find(d => d.model === opt.model && d.provider === opt.provider);
+      const av = sd ? sd.availability : 0;
+      if (filter === 'high' && av < 90) return false;
+      if (filter === 'mid' && (av < 50 || av >= 90)) return false;
+      if (filter === 'low' && av >= 50) return false;
+    }
+    return true;
+  });
+
+  const totalCount = allModelOptions.length;
+  const showCount = filtered.length;
+  countEl.textContent = `已选 ${selected.size} 个 · 显示 ${showCount}/${totalCount} 个模型`;
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="empty">无匹配模型</div>';
+    return;
+  }
+  container.innerHTML = filtered.map(opt => {
+    const checked = selected.has(opt.model) ? 'checked' : '';
+    const ctx = (modelDetails[opt.model] || {}).context_length;
+    const ctxStr = ctx ? ' · ' + fmtCtx(ctx) : '';
+    // 从 stabilityData 获取状态
+    const sd = (stabilityData || []).find(d => d.model === opt.model && d.provider === opt.provider);
+    const pct = sd ? (typeof sd.availability === 'number' ? sd.availability.toFixed(1) : parseFloat(sd.availability || 0).toFixed(1)) : '--';
+    const dotColor = sd ? (pct >= 90 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)') : 'var(--unknown)';
+    return `<label class="model-checkbox-item" style="padding:6px 8px;margin-bottom:2px;">
+      <input type="checkbox" class="router-model-cb" data-router="${currentRouterName}" value="${opt.model}" ${checked} onchange="onRouterModelToggle()">
+      <div class="model-checkbox-label" style="font-size:13px;">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:6px;flex-shrink:0;"></span>
+        <span class="model-provider-badge">${opt.provider}</span>${opt.model}<span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">${ctxStr}</span>
+      </div>
+    </label>`;
+  }).join('');
+}
+
+function onRouterModelToggle() {
+  // 先同步当前 DOM 勾选状态到 routersData
+  if (currentRouterName && routersData[currentRouterName] !== undefined) {
+    const models = [];
+    document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
+      if (cb.checked) models.push(cb.value);
+    });
+    routersData[currentRouterName] = models;
+  }
+  // 仅更新计数，不重新渲染整个列表（避免丢失勾选焦点）
+  const selected = new Set(routersData[currentRouterName] || []);
+  const totalCount = allModelOptions.length;
+  document.getElementById('routerModelCount').textContent = `已选 ${selected.size} 个 · 显示 ${totalCount}/${totalCount} 个模型`;
+}
+
+function selectAllRouterModels(selectAll) {
+  if (!currentRouterName) return;
+  const container = document.getElementById('routerModelList');
+  const cbs = container.querySelectorAll('.router-model-cb');
+  cbs.forEach(cb => cb.checked = selectAll);
+  // 收集当前显示的所有 model
+  const models = [];
+  cbs.forEach(cb => { if (cb.checked) models.push(cb.value); });
+  routersData[currentRouterName] = models;
+  renderRouterModels();
+}
+
+function addRouterGroup() {
+  const name = document.getElementById('newRouterName').value.trim();
+  if (!name) { showToast('请输入路由名称', 'warn'); return; }
+  if (routersData.hasOwnProperty(name)) { showToast('该路由名称已存在', 'warn'); return; }
+  routersData[name] = [];
+  document.getElementById('newRouterName').value = '';
+  renderRouterList();
+  selectRouterGroup(name);
+}
+
+async function saveRouters() {
+  // 先从 DOM 收集勾选状态（当前选中的路由组）
+  document.querySelectorAll('.router-model-cb').forEach(cb => {
+    const router = cb.dataset.router;
+    if (!routersData[router]) routersData[router] = [];
+    // 只更新当前路由组，其他保持
+    if (router === currentRouterName) {
+      const allCbs = document.querySelectorAll(`.router-model-cb[data-router="${router}"]`);
+      routersData[router] = [];
+      allCbs.forEach(c => { if (c.checked) routersData[router].push(c.value); });
+    }
+  });
+  try {
+    const r = await apiFetch('/api/routers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(routersData)
+    });
+    if (r.ok) showToast('路由配置已保存', 'ok');
+    else { showToast('保存失败', 'error'); }
+  } catch (e) { if (e.message !== 'Unauthorized') { console.error(e); showToast('保存请求错误', 'error'); } }
 }
 
 let _visionModelSet = new Set();
@@ -1731,84 +1992,13 @@ function closeVisionConfig() {
   document.getElementById('visionModal').classList.remove('show');
 }
 
-// 弹窗打开时锁定底层滚动（监听所有 .modal-overlay 的 class 变化，统一处理所有弹窗）
+// 弹窗打开时锁定底层滚动
 (function() {
   const mo = new MutationObserver(() => {
     document.body.style.overflow = document.querySelector('.modal-overlay.show') ? 'hidden' : '';
   });
   document.querySelectorAll('.modal-overlay').forEach(m => mo.observe(m, { attributes: true, attributeFilter: ['class'] }));
 })();
-
-function renderRouterList() {
-  const container = document.getElementById('routerListContainer');
-  const names = Object.keys(routersData);
-  if (names.length === 0) {
-    container.innerHTML = '<div class="empty">暂无路由组，请在上方输入名称后点击"+ 添加路由"</div>';
-    return;
-  }
-  if (allModelOptions.length === 0) {
-    container.innerHTML = '<div class="empty" style="color:var(--danger)">未获取到任何模型，请先配置上游提供商</div>';
-    return;
-  }
-  container.innerHTML = names.map(name => {
-    const selected = new Set(routersData[name] || []);
-    const boxes = allModelOptions.map(opt => {
-      const checked = selected.has(opt.model) ? 'checked' : '';
-      const ctx = (modelDetails[opt.model] || {}).context_length;
-      const ctxStr = ctx ? ' · ' + ctx : '';
-      return `<label class="model-checkbox-item" style="padding:6px 10px;margin-bottom:4px;">
-        <input type="checkbox" class="router-model-cb" data-router="${name}" value="${opt.model}" ${checked}>
-        <div class="model-checkbox-label" style="font-size:13px;"><span class="model-provider-badge">${opt.provider}</span>${opt.model}<span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">${ctxStr}</span></div>
-      </label>`;
-    }).join('');
-    return `<div style="border:1px solid var(--mac-border);border-radius:8px;padding:12px;background:rgba(255,255,255,0.4);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="font-weight:600;font-size:14px;">🔀 ${name} <span style="font-size:11px;color:var(--text-secondary);font-weight:400;">(客户端 model 字段填这个名称即可命中)</span></div>
-        <button class="btn" style="padding:3px 8px;font-size:11px;color:var(--danger);" onclick="removeRouterGroup('${name}')">删除</button>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;">${boxes}</div>
-    </div>`;
-  }).join('');
-}
-
-function addRouterGroup() {
-  const name = document.getElementById('newRouterName').value.trim();
-  if (!name) { showToast('请输入路由名称', 'warn'); return; }
-  if (routersData.hasOwnProperty(name)) { showToast('该路由名称已存在', 'warn'); return; }
-  routersData[name] = [];
-  document.getElementById('newRouterName').value = '';
-  renderRouterList();
-}
-
-function removeRouterGroup(name) {
-  if (!confirm('确定删除路由组「' + name + '」？')) return;
-  delete routersData[name];
-  renderRouterList();
-}
-
-async function saveRouters() {
-  // 先从 DOM 收集勾选状态
-  const collected = {};
-  document.querySelectorAll('.router-model-cb').forEach(cb => {
-    const router = cb.dataset.router;
-    if (!collected[router]) collected[router] = [];
-    if (cb.checked) collected[router].push(cb.value);
-  });
-  // 合并：保留 collected 里没有出现过的路由组（空数组）
-  Object.keys(routersData).forEach(k => {
-    if (!collected.hasOwnProperty(k)) collected[k] = routersData[k] || [];
-  });
-  routersData = collected;
-  try {
-    const r = await apiFetch('/api/routers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(routersData)
-    });
-    if (r.ok) showToast('路由配置已保存', 'ok');
-    else { showToast('保存失败', 'error'); }
-  } catch (e) { if (e.message !== 'Unauthorized') { console.error(e); showToast('保存请求错误', 'error'); } }
-}
 
 /* ============ 外链拦截：target=_blank 统一走系统浏览器（pywebview 内会拦截，改调 /api/open-url） ============ */
 document.addEventListener('click', function(e) {
