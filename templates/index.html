@@ -849,6 +849,8 @@ input:checked + .slider:before { transform: translateX(14px); }
             <option value="all">全部提供商</option>
           </select>
           <input type="text" id="routerSearchInput" placeholder="搜索模型..." oninput="renderRouterModels()" style="flex:1;min-width:100px;padding:4px 8px;border-radius:6px;border:1px solid var(--mac-border);background:transparent;color:var(--text-primary);font-size:12px;outline:none;">
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);white-space:nowrap;cursor:pointer;">
+            <input type="checkbox" id="routerSelectedOnly" onchange="renderRouterModels()" style="cursor:pointer;"> 已选</label>
         </div>
         <div style="font-size:11px;color:var(--text-secondary);" id="routerModelCount"></div>
         <div id="routerModelList" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; border:1px solid var(--mac-border); border-radius:8px; padding:8px; background:rgba(255,255,255,0.3);">
@@ -1830,10 +1832,14 @@ function renderRouterModels() {
     countEl.textContent = '';
     return;
   }
-  const selected = new Set(routersData[currentRouterName] || []);
+  const selectedList = routersData[currentRouterName] || [];
+  // 统计每个模型名在已选列表中的出现次数（处理同提供商多key的重复模型名）
+  const selectedCount = {};
+  selectedList.forEach(m => { selectedCount[m] = (selectedCount[m] || 0) + 1; });
   const filter = document.getElementById('routerStatusFilter').value;
   const search = document.getElementById('routerSearchInput').value.toLowerCase();
   const provider = document.getElementById('routerProviderFilter').value;
+  const showSelectedOnly = document.getElementById('routerSelectedOnly').checked;
 
   let filtered = allModelOptions.filter(opt => {
     if (provider !== 'all' && opt.provider !== provider) return false;
@@ -1846,19 +1852,25 @@ function renderRouterModels() {
       if (filter === 'mid' && (av < 50 || av >= 90)) return false;
       if (filter === 'low' && av >= 50) return false;
     }
+    // 当前已选中筛选
+    if (showSelectedOnly && !selectedCount[opt.model]) return false;
     return true;
   });
 
   const totalCount = allModelOptions.length;
   const showCount = filtered.length;
-  countEl.textContent = `已选 ${selected.size} 个 · 显示 ${showCount}/${totalCount} 个模型`;
+  const uniqueSelected = new Set(selectedList).size;
+  countEl.textContent = `已选 ${uniqueSelected} 个模型 · 显示 ${showCount}/${totalCount} 个`;
 
   if (filtered.length === 0) {
     container.innerHTML = '<div class="empty">无匹配模型</div>';
     return;
   }
+  // 用计数追踪每个模型名在已选列表中剩余的可勾选次数
+  const remainingCount = { ...selectedCount };
   container.innerHTML = filtered.map(opt => {
-    const checked = selected.has(opt.model) ? 'checked' : '';
+    const checked = (remainingCount[opt.model] || 0) > 0;
+    if (checked) remainingCount[opt.model]--;
     const ctx = (modelDetails[opt.model] || {}).context_length;
     const ctxStr = ctx ? ' · ' + fmtCtx(ctx) : '';
     // 从 stabilityData 获取状态
@@ -1866,7 +1878,7 @@ function renderRouterModels() {
     const pct = sd ? (typeof sd.availability === 'number' ? sd.availability.toFixed(1) : parseFloat(sd.availability || 0).toFixed(1)) : '--';
     const dotColor = sd ? (pct >= 90 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)') : 'var(--unknown)';
     return `<label class="model-checkbox-item" style="padding:6px 8px;margin-bottom:2px;">
-      <input type="checkbox" class="router-model-cb" data-router="${currentRouterName}" value="${opt.model}" ${checked} onchange="onRouterModelToggle()">
+      <input type="checkbox" class="router-model-cb" data-router="${currentRouterName}" value="${opt.model}" ${checked ? 'checked' : ''} onchange="onRouterModelToggle()">
       <div class="model-checkbox-label" style="font-size:13px;">
         <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:6px;flex-shrink:0;"></span>
         <span class="model-provider-badge">${opt.provider}</span>${opt.model}<span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">${ctxStr}</span>
