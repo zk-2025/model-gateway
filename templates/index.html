@@ -1876,13 +1876,14 @@ function renderRouterModels() {
 }
 
 function onRouterModelToggle() {
-  // 先同步当前 DOM 勾选状态到 routersData
+  // 先同步当前可见 DOM 的勾选状态到 routersData，保留被筛选遮挡的模型状态
   if (currentRouterName && routersData[currentRouterName] !== undefined) {
-    const models = [];
+    const currentSelected = new Set(routersData[currentRouterName] || []);
     document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
-      if (cb.checked) models.push(cb.value);
+      if (cb.checked) currentSelected.add(cb.value);
+      else currentSelected.delete(cb.value);
     });
-    routersData[currentRouterName] = models;
+    routersData[currentRouterName] = Array.from(currentSelected);
   }
   // 仅更新计数，不重新渲染整个列表（避免丢失勾选焦点）
   const selected = new Set(routersData[currentRouterName] || []);
@@ -1913,17 +1914,24 @@ function addRouterGroup() {
 }
 
 async function saveRouters() {
-  // 先从 DOM 收集勾选状态（当前选中的路由组）
-  document.querySelectorAll('.router-model-cb').forEach(cb => {
+  // 先同步当前可见 DOM 的勾选状态到 routersData（覆盖筛选后可见的模型）
+  document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
     const router = cb.dataset.router;
     if (!routersData[router]) routersData[router] = [];
-    // 只更新当前路由组，其他保持
-    if (router === currentRouterName) {
-      const allCbs = document.querySelectorAll(`.router-model-cb[data-router="${router}"]`);
-      routersData[router] = [];
-      allCbs.forEach(c => { if (c.checked) routersData[router].push(c.value); });
-    }
   });
+  // 用当前可见的 checkbox 更新 routersData 中对应模型的勾选状态
+  const visibleChecked = [];
+  document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]:checked`).forEach(cb => {
+    visibleChecked.push(cb.value);
+  });
+  // 保留未被筛选遮挡的模型状态，仅更新可见模型的勾选
+  const currentSelected = new Set(routersData[currentRouterName] || []);
+  // 从可见列表中移除已取消勾选的，添加新勾选的
+  document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]`).forEach(cb => {
+    if (cb.checked) currentSelected.add(cb.value);
+    else currentSelected.delete(cb.value);
+  });
+  routersData[currentRouterName] = Array.from(currentSelected);
   try {
     const r = await apiFetch('/api/routers', {
       method: 'POST',
