@@ -81,6 +81,11 @@ CONFIG_NOTE = (
     "  🔒 自定义 Key：在 local_api_key 中填入你的密钥，必须匹配才能通信\n"
     "【端口配置】\n"
     "  修改 port 字段即可，默认 8000\n"
+    "【轮询配置】\n"
+    "  poll_interval：轮询间隔（秒），默认 3600（1 小时）\n"
+    "  poll_work_start：工作时间开始（小时），默认 7\n"
+    "  poll_work_end：工作时间结束（小时），默认 21\n"
+    "  poll_daily_limit：每日轮询次数上限，默认 20，超过后改为每天 12:00 一次\n"
     "=============================="
 )
 
@@ -93,6 +98,11 @@ def load_config():
         cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         cfg.setdefault("port", 8000)
         cfg.setdefault("_note", CONFIG_NOTE)
+        # 轮询配置默认值
+        cfg.setdefault("poll_interval", 3600)
+        cfg.setdefault("poll_work_start", 7)
+        cfg.setdefault("poll_work_end", 21)
+        cfg.setdefault("poll_daily_limit", 20)
         # 三种模式：
         # ① local_api_key 字段不存在 → 自动生成随机 Key（安全模式）
         # ② local_api_key 为空字符串 "" → 开放模式（任意 Key 放行）
@@ -107,6 +117,10 @@ def load_config():
         "_note": CONFIG_NOTE,
         "local_api_key": "sk-local-" + secrets.token_hex(16),
         "port": 8000,
+        "poll_interval": 3600,
+        "poll_work_start": 7,
+        "poll_work_end": 21,
+        "poll_daily_limit": 20,
     }
     atomic_write(CONFIG_FILE, json.dumps(data, ensure_ascii=False, indent=2))
     return data
@@ -653,7 +667,60 @@ async def poll_all():
         except Exception:
             logger.exception("initial model_details fetch failed: %s", p.get("name"))
 
+    total_poll_count = 0
+    # 从历史记录中读取累计探针次数（持久化，重启不丢失）
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as _f:
+                total_poll_count = sum(1 for _ in _f)
+        except Exception:
+            pass
+
     while True:
+        now = time.localtime()
+
+        # 读取轮询配置
+        interval = app_config.get("poll_interval", 3600)
+        work_start = app_config.get("poll_work_start", 7)
+        work_end = app_config.get("poll_work_end", 21)
+        daily_limit = app_config.get("poll_daily_limit", 20)
+
+        current_hour = now.tm_hour
+
+        # 判断是否在工作时间
+        in_work_hours = work_start <= current_hour < work_end
+
+        if not in_work_hours:
+            # 非工作时间：计算下次工作开始时间，等待到那个时候
+            next_work = time.mktime((
+                now.tm_year, now.tm_mon, now.tm_mday,
+                work_start, 0, 0, now.tm_wday, now.tm_yday, now.tm_isdst
+            ))
+            if next_work <= time.time():
+                next_work += 86400  # 明天
+            wait_seconds = next_work - time.time()
+            logger.info("非工作时间，等待 %d 秒后恢复轮询", int(wait_seconds))
+            # 同时检查手动检测的顺延
+            while time.time() < max(next_work, last_check_time + interval):
+                await asyncio.sleep(30)
+            continue
+
+        # 检查每日轮询次数上限
+        if total_poll_count >= daily_limit:
+            # 超过上限，改为每天 12:00 检测一次
+            noon_today = time.mktime((
+                now.tm_year, now.tm_mon, now.tm_mday,
+                12, 0, 0, now.tm_wday, now.tm_yday, now.tm_isdst
+            ))
+            if time.time() < noon_today:
+                wait_seconds = noon_today - time.time()
+            else:
+                wait_seconds = noon_today + 86400 - time.time()
+            logger.info("累计轮询已达 %d 次上限，改为每天 12:00 检测一次", total_poll_count)
+            while time.time() < max(time.time() + wait_seconds, last_check_time + interval):
+                await asyncio.sleep(30)
+            continue
+
         try:
             tasks = []
             for p in list(providers):
@@ -663,15 +730,16 @@ async def poll_all():
             health_status = new_status
             last_poll_time = time.time()
             last_check_time = last_poll_time
+            total_poll_count += 1
             await append_history(new_status)
             await maybe_cleanup_history()
             ok_count = sum(1 for v in new_status.values() if v.get("status") == "ok")
-            logger.info("poll done: %d/%d ok", ok_count, len(new_status))
+            logger.info("poll done: %d/%d ok, 今日已检测 %d 次", ok_count, len(new_status), total_poll_count)
         except Exception:
             logger.exception("poll_all loop error")
-        # 等待到 last_check_time + POLL_INTERVAL；
+        # 等待到 last_check_time + interval；
         # 若手动检测更新了 last_check_time，则顺延，避免短时间内重复轮询
-        while time.time() < last_check_time + POLL_INTERVAL:
+        while time.time() < last_check_time + interval:
             await asyncio.sleep(5)
 
 
