@@ -4,6 +4,10 @@ import time
 import os
 import logging
 import hashlib
+import socket
+import threading
+import winreg
+import subprocess
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -39,7 +43,12 @@ if getattr(sys, 'frozen', False):
     DATA_DIR = Path(sys.executable).parent
 else:
     APP_DIR = Path(__file__).parent
-    DATA_DIR = Path(__file__).parent
+    # 开发模式支持环境变量 GATEWAY_DATA_DIR 指向真实数据目录（如 dist/）
+    _env_data = os.environ.get("GATEWAY_DATA_DIR", "")
+    if _env_data:
+        DATA_DIR = Path(_env_data) if Path(_env_data).is_absolute() else Path(__file__).parent / _env_data
+    else:
+        DATA_DIR = Path(__file__).parent
 
 DATA_FILE = DATA_DIR / "providers.json"
 CONFIG_FILE = DATA_DIR / "config.json"
@@ -49,7 +58,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -59,6 +68,8 @@ POLL_INTERVAL = 300
 CIRCUIT_FAIL_THRESHOLD = 3
 CIRCUIT_RECOVERY_SECONDS = 60
 QUALITY_WINDOW = 20
+POLL_MAX_COUNT = 20
+CALL_LOG_MAX = 100
 
 
 # ============================================================
@@ -75,9 +86,18 @@ def atomic_write(path: Path, content: str):
 # ============================================================
 def load_config():
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        # 补充缺失的默认字段
+        data.setdefault("local_api_key", "sk-local-" + secrets.token_hex(16))
+        data.setdefault("port", 8000)
+        data.setdefault("poll_count", 0)
+        data.setdefault("last_daily_poll", "")
+        return data
     data = {
         "local_api_key": "sk-local-" + secrets.token_hex(16),
+        "port": 8000,
+        "poll_count": 0,
+        "last_daily_poll": "",
     }
     atomic_write(CONFIG_FILE, json.dumps(data, indent=2))
     return data
@@ -176,6 +196,33 @@ def verify_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 
 # ============================================================
+# 断电恢复：检查一键配置的残留备份，自动还原
+# ============================================================
+def _recover_preset_backup():
+    bak_p = DATA_FILE.with_suffix(DATA_FILE.suffix + ".preset_bak")
+    bak_r = ROUTERS_FILE.with_suffix(ROUTERS_FILE.suffix + ".preset_bak")
+    recovered = False
+    if bak_p.exists():
+        try:
+            atomic_write(DATA_FILE, bak_p.read_text("utf-8"))
+            bak_p.unlink()
+            recovered = True
+            logger.warning("断电恢复：已从备份还原 providers.json")
+        except Exception:
+            logger.exception("备份还原 providers.json 失败")
+    if bak_r.exists():
+        try:
+            atomic_write(ROUTERS_FILE, bak_r.read_text("utf-8"))
+            bak_r.unlink()
+            recovered = True
+            logger.warning("断电恢复：已从备份还原 routers.json")
+        except Exception:
+            logger.exception("备份还原 routers.json 失败")
+    return recovered
+
+_recover_preset_backup()
+
+# ============================================================
 # 全局状态
 # ============================================================
 providers = load_providers()
@@ -191,6 +238,14 @@ poll_task = None
 last_poll_time: float = 0
 last_check_time: float = time.time()
 last_history_cleanup: float = 0
+
+# 调用日志（内存队列，最多保留 100 条）
+call_log = deque(maxlen=CALL_LOG_MAX)
+
+# 轮询计数（从 config 加载，poll_all 里增量更新）
+poll_count_state = app_config.get("poll_count", 0)
+last_daily_poll_state = app_config.get("last_daily_poll", "")
+poll_stage = "init"  # init | waiting | fetching_models | running | idle
 
 
 def mark_full_check():
@@ -608,18 +663,38 @@ async def run_health_checks(tasks: list[tuple[str, str, str, str]]) -> dict:
 
 
 async def poll_all():
-    global health_status, last_poll_time, last_check_time
-    # 首次拉取 model details
-    for p in list(providers):
+    global health_status, last_poll_time, last_check_time, poll_count_state, last_daily_poll_state, poll_stage
+    # 先让窗口加载出来，避免卡在启动页
+    poll_stage = "waiting"
+    await asyncio.sleep(1.5)
+
+    # 并发拉取所有 provider 的 model details（原来串行很慢）
+    poll_stage = "fetching_models"
+    async def fetch_one(p):
         try:
-            details = await fetch_model_details(p["base_url"], p["api_key"])
-            if details:
-                model_details.update(details)
+            return await fetch_model_details(p["base_url"], p["api_key"])
         except Exception:
-            logger.exception("initial model_details fetch failed: %s", p.get("name"))
+            logger.exception("model_details fetch failed: %s", p.get("name"))
+            return {}
+    results = await asyncio.gather(*[fetch_one(p) for p in list(providers)])
+    for details in results:
+        if details:
+            model_details.update(details)
 
     while True:
         try:
+            # 每天中午 12 点强制检测一次（无论 poll_count 是否超过 20）
+            today = time.strftime("%Y-%m-%d")
+            now_hour = time.localtime().tm_hour
+            should_daily_poll = (today != last_daily_poll_state and now_hour >= 12)
+
+            # 超过 20 次且不是每日检测时间 → 跳过
+            if poll_count_state >= POLL_MAX_COUNT and not should_daily_poll:
+                poll_stage = "idle"
+                await asyncio.sleep(30)
+                continue
+
+            poll_stage = "running"
             tasks = []
             for p in list(providers):
                 for m in get_enabled_models(p):
@@ -632,10 +707,18 @@ async def poll_all():
             await maybe_cleanup_history()
             ok_count = sum(1 for v in new_status.values() if v.get("status") == "ok")
             logger.info("poll done: %d/%d ok", ok_count, len(new_status))
+
+            # 更新轮询计数 & 每日检测标记
+            poll_count_state += 1
+            app_config["poll_count"] = poll_count_state
+            if should_daily_poll:
+                last_daily_poll_state = today
+                app_config["last_daily_poll"] = today
+            save_config()
+
         except Exception:
             logger.exception("poll_all loop error")
-        # 等待到 last_check_time + POLL_INTERVAL；
-        # 若手动检测更新了 last_check_time，则顺延，避免短时间内重复轮询
+        # 等待到 last_check_time + POLL_INTERVAL
         while time.time() < last_check_time + POLL_INTERVAL:
             await asyncio.sleep(5)
 
@@ -831,14 +914,12 @@ def ensure_lang_reply(body: dict) -> dict:
 # ============================================================
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "local_api_key": LOCAL_API_KEY,
-            "app_version": APP_VERSION,
-        },
-    )
+    ctx = {
+        "request": request,
+        "local_api_key": LOCAL_API_KEY,
+        "app_version": APP_VERSION,
+    }
+    return templates.TemplateResponse("index.html", ctx)
 
 
 # ============================================================
@@ -849,6 +930,9 @@ async def poll_status(_=Depends(verify_admin)):
     return {
         "last_poll_time": last_poll_time,
         "total_models": sum(len(get_enabled_models(p)) for p in providers),
+        "poll_count": poll_count_state,
+        "poll_max": POLL_MAX_COUNT,
+        "stage": poll_stage,
     }
 
 
@@ -910,6 +994,8 @@ async def get_stability(hours: int = 24, _=Depends(verify_admin)):
             "last_status": health_status.get(key, {}).get("status", "unknown"),
             "vision": is_vision_model(model),
         })
+    # 隐藏从未成功过的模型（检查过但 ok=0），新加入的模型（checks=0）正常展示
+    result = [r for r in result if not (r["checks"] > 0 and r["ok"] == 0)]
     result.sort(key=lambda x: (-x["availability"], x["avg_latency_ms"] or 99999))
     _stability_cache[hours] = (now, result)
     return result
@@ -1346,67 +1432,88 @@ async def apply_preset(data: PresetApplyIn, _=Depends(verify_admin)):
     """一键应用预设：三平台逐个校验 key → 创建/覆盖 provider → 合并路由组。
     - 用户填了 Key 的平台：校验 → 覆盖旧配置 → 重新拉模型
     - 用户没填 Key 但已有同名 provider：跳过，保留原配置不变
-    - 用户没填 Key 且无同名 provider：标记未配置"""
+    - 用户没填 Key 且无同名 provider：标记未配置
+
+    断电保护：保存前先备份，保存后删备份。下次启动若发现备份残留自动恢复。"""
     preset = await load_preset()
     platforms = preset.get("platforms", {})
     keys = data.keys or {}
     results = {}
     created_names = []
-    async with providers_lock:
-        existing_names = {p["name"] for p in providers}
-        for plat_name, plat_cfg in platforms.items():
-            key = (keys.get(plat_name) or "").strip()
-            if not key:
-                # 没填 Key：如果已有同名 provider，用已有 key 重新拉模型（确保预设新增的模型生效）
-                if plat_name in existing_names:
-                    existing = next((p for p in providers if p["name"] == plat_name), None)
-                    if existing and existing.get("api_key"):
-                        key = existing["api_key"]
-                        # 继续往下执行（复用已有 key 重新拉模型）
+
+    # ---- 备份当前数据（防断电） ----
+    bak_providers = DATA_FILE.with_suffix(DATA_FILE.suffix + ".preset_bak")
+    bak_routers = ROUTERS_FILE.with_suffix(ROUTERS_FILE.suffix + ".preset_bak")
+    try:
+        if DATA_FILE.exists():
+            bak_providers.write_text(DATA_FILE.read_text("utf-8"), "utf-8")
+        if ROUTERS_FILE.exists():
+            bak_routers.write_text(ROUTERS_FILE.read_text("utf-8"), "utf-8")
+    except Exception:
+        pass  # 备份失败不阻塞主流程
+
+    try:
+        async with providers_lock:
+            existing_names = {p["name"] for p in providers}
+            for plat_name, plat_cfg in platforms.items():
+                key = (keys.get(plat_name) or "").strip()
+                if not key:
+                    if plat_name in existing_names:
+                        existing = next((p for p in providers if p["name"] == plat_name), None)
+                        if existing and existing.get("api_key"):
+                            key = existing["api_key"]
+                        else:
+                            results[plat_name] = {"ok": True, "detail": "保留已有配置（无可用 Key）"}
+                            continue
                     else:
-                        results[plat_name] = {"ok": True, "detail": "保留已有配置（无可用 Key）"}
+                        results[plat_name] = {"ok": False, "detail": "未填写 Key"}
                         continue
-                else:
-                    results[plat_name] = {"ok": False, "detail": "未填写 Key"}
+                vr = await verify_provider_key_impl(plat_cfg["base_url"], key)
+                if not vr["ok"]:
+                    results[plat_name] = {"ok": False, "detail": vr["detail"]}
                     continue
-            # 校验 key
-            vr = await verify_provider_key_impl(plat_cfg["base_url"], key)
-            if not vr["ok"]:
-                results[plat_name] = {"ok": False, "detail": vr["detail"]}
-                continue
-            # 同名则先移除旧配置（覆盖历史数据，用新 key 重建）
-            if plat_name in existing_names:
-                providers[:] = [p for p in providers if p["name"] != plat_name]
-                existing_names.discard(plat_name)
-            # 拉模型
-            fetched = await fetch_models(plat_cfg["base_url"], key, plat_cfg.get("free_only", True))
-            visible = plat_cfg.get("models_visible", [])
-            if visible:
-                models = [m for m in fetched if m in set(visible)]
-                for m in visible:
-                    if m not in models:
-                        models.append(m)
-                disabled = []
-            else:
-                models = fetched
-                disabled = []
-            providers.append({
-                "name": plat_name,
-                "base_url": plat_cfg["base_url"],
-                "api_key": key,
-                "models": models,
-                "disabled_models": disabled,
-                "free_only": plat_cfg.get("free_only", True),
-            })
-            existing_names.add(plat_name)
-            created_names.append(plat_name)
-            results[plat_name] = {"ok": True, "detail": f"已配置 {len(models)} 个模型"}
-        save_providers(providers)
-        # 预设路由组覆盖（预设有的组完全替换为模板，预设没的组保留不动）
-        preset_routers = preset.get("routers", {})
-        for gname, members in preset_routers.items():
-            ROUTERS[gname] = list(members)
-        save_routers()
+                if plat_name in existing_names:
+                    providers[:] = [p for p in providers if p["name"] != plat_name]
+                    existing_names.discard(plat_name)
+                fetched = await fetch_models(plat_cfg["base_url"], key, plat_cfg.get("free_only", True))
+                visible = plat_cfg.get("models_visible", [])
+                if visible:
+                    models = [m for m in fetched if m in set(visible)]
+                    for m in visible:
+                        if m not in models:
+                            models.append(m)
+                    disabled = []
+                else:
+                    models = fetched
+                    disabled = []
+                providers.append({
+                    "name": plat_name,
+                    "base_url": plat_cfg["base_url"],
+                    "api_key": key,
+                    "models": models,
+                    "disabled_models": disabled,
+                    "free_only": plat_cfg.get("free_only", True),
+                })
+                existing_names.add(plat_name)
+                created_names.append(plat_name)
+                results[plat_name] = {"ok": True, "detail": f"已配置 {len(models)} 个模型"}
+            save_providers(providers)
+            preset_routers = preset.get("routers", {})
+            for gname, members in preset_routers.items():
+                ROUTERS[gname] = list(members)
+            save_routers()
+    except Exception:
+        raise
+    finally:
+        # ---- 保存成功，删除备份 ----
+        try:
+            if bak_providers.exists():
+                bak_providers.unlink()
+            if bak_routers.exists():
+                bak_routers.unlink()
+        except Exception:
+            pass
+
     return {"ok": True, "results": results, "created": created_names}
 
 
@@ -1699,6 +1806,14 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                 except httpx.RequestError as e:
                     logger.warning("stream connect error to %s: %s", provider["name"], e)
                     record_fail(k)
+                    call_log.append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "provider": provider["name"],
+                        "model": model,
+                        "status": "fail",
+                        "tokens": 0,
+                        "error": "连接失败",
+                    })
                     continue
 
                 if resp.status_code != 200:
@@ -1709,6 +1824,14 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     await resp.aclose()
                     logger.warning("upstream stream error %d from %s", resp.status_code, provider["name"])
                     record_fail(k)
+                    call_log.append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "provider": provider["name"],
+                        "model": model,
+                        "status": "fail",
+                        "tokens": 0,
+                        "error": f"HTTP {resp.status_code}",
+                    })
                     continue
 
                 usage_obj = None
@@ -1762,6 +1885,13 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                             "provider": provider["name"],
                             "pt": pt, "ct": ct, "tt": pt + ct,
                         })
+                        call_log.append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "provider": provider["name"],
+                            "model": model,
+                            "status": "ok",
+                            "tokens": pt + ct,
+                        })
                     except Exception:
                         logger.exception("append_usage(stream) failed")
                     return
@@ -1769,6 +1899,14 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     stream_ok = False
                     logger.exception("stream interrupted from %s, switching", provider["name"])
                     record_fail(k)
+                    call_log.append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "provider": provider["name"],
+                        "model": model,
+                        "status": "fail",
+                        "tokens": 0,
+                        "error": "流中断",
+                    })
                     try:
                         await resp.aclose()
                     except Exception:
@@ -1840,6 +1978,14 @@ async def proxy_chat(request: Request, force: bool = False):
                     logger.warning("upstream %d from %s: %s", resp.status_code, provider["name"], resp.text[:200])
                     record_fail(k)
                     last_err = f"upstream {resp.status_code}"
+                    call_log.append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "provider": provider["name"],
+                        "model": model,
+                        "status": "fail",
+                        "tokens": 0,
+                        "error": f"HTTP {resp.status_code}",
+                    })
                     continue
                 try:
                     parsed = json.loads(resp.text)
@@ -1857,6 +2003,14 @@ async def proxy_chat(request: Request, force: bool = False):
                             "ts": time.time(), "model": model,
                             "provider": provider["name"],
                             "pt": pt, "ct": ct, "tt": pt + ct,
+                        })
+                        # 调用日志记录
+                        call_log.append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "provider": provider["name"],
+                            "model": model,
+                            "status": "ok",
+                            "tokens": pt + ct,
                         })
                     except Exception:
                         logger.exception("append_usage(non-stream) failed")
@@ -1879,16 +2033,40 @@ async def proxy_chat(request: Request, force: bool = False):
                     logger.warning("upstream non-json from %s: %s", provider["name"], resp.text[:200])
                     record_fail(k)
                     last_err = f"upstream non-json ({resp.status_code})"
+                    call_log.append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "provider": provider["name"],
+                        "model": model,
+                        "status": "fail",
+                        "tokens": 0,
+                        "error": "响应格式错误",
+                    })
                     continue
             except httpx.RequestError as e:
                 logger.warning("forward error to %s: %s", provider["name"], e)
                 record_fail(k)
                 last_err = str(e)
+                call_log.append({
+                    "time": time.strftime("%H:%M:%S"),
+                    "provider": provider["name"],
+                    "model": model,
+                    "status": "fail",
+                    "tokens": 0,
+                    "error": "连接失败",
+                })
                 continue
             except Exception as e:
                 logger.exception("unexpected forward error to %s", provider["name"])
                 record_fail(k)
                 last_err = str(e)
+                call_log.append({
+                    "time": time.strftime("%H:%M:%S"),
+                    "provider": provider["name"],
+                    "model": model,
+                    "status": "fail",
+                    "tokens": 0,
+                    "error": "未知错误",
+                })
                 continue
 
     raise HTTPException(502, f"所有候选模型均失败: {last_err}")
@@ -1896,6 +2074,99 @@ async def proxy_chat(request: Request, force: bool = False):
 
 _models_cache = {"ts": 0, "data": None}
 MODELS_CACHE_TTL = 30
+
+
+# ============================================================
+# 调用日志
+# ============================================================
+@app.get("/api/call-log")
+async def get_call_log(_=Depends(verify_admin)):
+    return list(call_log)
+
+
+# ============================================================
+# 配置 API（API Key、端口等）
+# ============================================================
+@app.put("/api/config")
+async def update_config(request: Request, _=Depends(verify_admin)):
+    """更新 local_api_key 等配置项"""
+    global LOCAL_API_KEY
+    body = await request.json()
+    if "local_api_key" in body:
+        new_key = body["local_api_key"].strip()
+        if new_key:
+            app_config["local_api_key"] = new_key
+            LOCAL_API_KEY = new_key
+            save_config()
+            return {"ok": True, "key": new_key}
+        else:
+            raise HTTPException(400, "API Key 不能为空")
+    return {"ok": False, "error": "无可更新的字段"}
+
+
+@app.put("/api/port")
+async def update_port(request: Request, _=Depends(verify_admin)):
+    """更新端口并触发重启"""
+    body = await request.json()
+    new_port = int(body.get("port", 8000))
+    if new_port < 1024 or new_port > 65535:
+        raise HTTPException(400, "端口号范围: 1024-65535")
+    app_config["port"] = new_port
+    save_config()
+    # 延迟重启，让 API 先返回
+    def restart():
+        time.sleep(0.5)
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([sys.executable], close_fds=True,
+                           creationflags=0x00000008 if sys.platform == "win32" else 0)
+        else:
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve())], close_fds=True)
+        os._exit(0)
+    threading.Thread(target=restart, daemon=True).start()
+    return {"ok": True, "port": new_port, "message": "端口已保存，程序即将重启"}
+
+
+# ============================================================
+# 开机自启动
+# ============================================================
+STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+VALUE_NAME = "ModelGateway"
+
+
+@app.get("/api/autostart")
+async def get_autostart(_=Depends(verify_admin)):
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0,
+                            winreg.KEY_READ)
+        winreg.QueryValueEx(key, VALUE_NAME)
+        winreg.CloseKey(key)
+        return {"enabled": True}
+    except FileNotFoundError:
+        return {"enabled": False}
+    except Exception:
+        return {"enabled": False}
+
+
+@app.post("/api/autostart")
+async def set_autostart(request: Request, _=Depends(verify_admin)):
+    body = await request.json()
+    enabled = bool(body.get("enabled", False))
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0,
+                            winreg.KEY_SET_VALUE)
+        if enabled:
+            exe_path = sys.executable
+            winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ,
+                            f'"{exe_path}"')
+        else:
+            try:
+                winreg.DeleteValue(key, VALUE_NAME)
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+        return {"ok": True, "enabled": enabled}
+    except Exception as e:
+        raise HTTPException(500, f"操作失败: {e}")
 
 
 @app.api_route("/v1/models", methods=["GET"], dependencies=[Depends(verify_client)])
@@ -1941,7 +2212,6 @@ async def proxy_models():
 
 if __name__ == "__main__":
     import uvicorn
-    import threading
     import webview
     import time
     from PIL import Image, ImageDraw
@@ -1951,13 +2221,11 @@ if __name__ == "__main__":
     # ---- 清理上次更新的残留文件 ----
     _cleanup_old_exe()
 
-    # ---- 单实例限制 ----
-    # 真实客户端（打包 exe）：已运行则弹窗提示并退出，不允许重复打开。
-    # 开发/测试（python app.py）：设环境变量 GATEWAY_AUTO_KILL=1 时，
-    # 自动关闭占用端口的旧实例后再启动，方便反复重启调试。
-    import socket
-    import subprocess
+    # ---- 读取端口配置 ----
+    cfg = load_config()
+    desired_port = cfg.get("port", 8000)
 
+    # ---- 端口工具函数 ----
     def port_in_use(port: int) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
@@ -1982,13 +2250,20 @@ if __name__ == "__main__":
             pass
         return False
 
+    def find_available_port(start: int, max_try: int = 100) -> int:
+        for p in range(start, start + max_try):
+            if not port_in_use(p):
+                return p
+        return start  # fallback
+
+    # ---- 单实例限制（文件锁要最先，避免 config 被污染） ----
     AUTO_KILL = os.environ.get("GATEWAY_AUTO_KILL") == "1"
 
-    if AUTO_KILL and port_in_use(8000):
-        kill_old_instance(8000)
+    # 如果是测试模式自动杀旧实例，先杀再拿锁
+    if AUTO_KILL and port_in_use(desired_port):
+        kill_old_instance(desired_port)
         time.sleep(1.5)
 
-    # 文件锁：真实客户端靠它拦截重复启动；测试模式端口已清，锁也能正常获取
     LOCK_FILE = str(DATA_DIR / ".gateway.lock")
     try:
         _lock_fd = open(LOCK_FILE, "w")
@@ -2000,20 +2275,44 @@ if __name__ == "__main__":
         )
         sys.exit(0)
 
-    # ---- 生成托盘图标（纯几何图形，不依赖外部图片文件） ----
+    # 自动找可用端口（锁拿到了才能安全改 config）
+    actual_port = find_available_port(desired_port)
+    if actual_port != desired_port:
+        cfg["port"] = actual_port
+        atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2))
+        if not AUTO_KILL:
+            logger.info("端口 %d 被占用，自动使用 %d", desired_port, actual_port)
+
+    # ---- WebView2 环境检测（Win7 等旧系统自动安装） ----
+    _webview2_ok = False
+    try:
+        import webview.platforms.edgechromium
+        _webview2_ok = True
+    except Exception:
+        pass
+    if not _webview2_ok:
+        setup_exe = APP_DIR / "MicrosoftEdgeWebview2Setup.exe"
+        if setup_exe.exists():
+            logger.info("WebView2 未安装，开始静默安装...")
+            try:
+                subprocess.run(
+                    [str(setup_exe), "/silent", "/install"],
+                    capture_output=True, timeout=120,
+                )
+                logger.info("WebView2 安装完成")
+            except Exception:
+                logger.warning("WebView2 安装失败，尝试使用系统默认浏览器")
+
+    # ---- 生成托盘图标 ----
     def create_tray_icon():
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        # 蓝色圆角底
         draw.rounded_rectangle([4, 4, 60, 60], radius=14, fill=(30, 144, 255))
-        # 白色右箭头，代表"网关/转发"
         draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
         return img
 
-    # ---- 全局状态：quitting 用于区分"点X隐藏"与"托盘退出" ----
     state = {"window": None, "quitting": False}
 
-    # ---- 托盘菜单回调 ----
     def on_show(icon, item):
         w = state["window"]
         if w:
@@ -2036,34 +2335,37 @@ if __name__ == "__main__":
         ),
     )
 
-    # ---- FastAPI 服务器（daemon 线程，主进程退出时自动结束） ----
-    def start_server():
-        uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    # ---- FastAPI 服务器（daemon 线程） ----
+    def start_server(port: int):
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
-    t = threading.Thread(target=start_server, daemon=True)
+    t = threading.Thread(target=start_server, args=(actual_port,), daemon=True)
     t.start()
 
-    # 给一点点时间让 FastAPI 绑定端口
-    time.sleep(1)
+    # ---- 轮询等待服务就绪（每 100ms 检查，最多等 5 秒） ----
+    for _ in range(50):
+        time.sleep(0.1)
+        if port_in_use(actual_port):
+            break
 
-    # ---- 创建原生的桌面窗口 ----
+    # ---- 创建窗口并直接加载页面 ----
+    url = f'http://127.0.0.1:{actual_port}/'
     window = webview.create_window(
-        '无限额度监控网关', 'http://127.0.0.1:8000/', width=1200, height=800
+        '无限额度监控网关', url, width=1200, height=800
     )
     state["window"] = window
 
-    # ---- 拦截关闭：点 X 时隐藏到托盘，而非退出程序 ----
     def on_closing():
         if state["quitting"]:
-            return  # 退出流程：放行，允许真正关闭
+            return
         window.hide()
-        return False  # 阻止关闭，仅隐藏窗口
+        return False
 
     window.events.closing += on_closing
 
-    # ---- 启动系统托盘（独立 daemon 线程） ----
+    # ---- 启动系统托盘 ----
     threading.Thread(target=tray_icon.run, daemon=True).start()
 
-    # ---- 启动 webview（主线程阻塞，窗口全部关闭后返回） ----
+    # ---- 启动 webview ----
     webview.start()
 

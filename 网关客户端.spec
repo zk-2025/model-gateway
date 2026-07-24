@@ -11,7 +11,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('models_meta.json', '.')],
+    datas=[('templates', 'templates'), ('models_meta.json', '.'), ('MicrosoftEdgeWebview2Setup.exe', '.')],
     hiddenimports=['pystray._win32', 'PIL', 'PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},

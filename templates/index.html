@@ -305,6 +305,7 @@ body {
   background: rgba(255,255,255,0.8); border: 1px solid rgba(0,0,0,0.1);
   color: var(--text-primary); padding: 4px 10px; border-radius: 5px;
   font-size: 11px; font-weight: 500; cursor: pointer; transition: 0.2s;
+  white-space: nowrap; flex-shrink: 0;
 }
 .btn-copy:hover { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 
@@ -494,14 +495,14 @@ input:checked + .slider:before { transform: translateX(14px); }
 /* 提供商编辑表单 */
 .form-field { margin-bottom: 14px; }
 .form-field > label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
-.form-field input[type="text"], .form-field input[type="password"] {
+.form-field input[type="text"], .form-field input[type="password"], .form-field input[type="number"] {
   width: 100%; padding: 9px 12px; border-radius: 8px;
   border: 1px solid var(--mac-border); background: rgba(255,255,255,0.6);
   color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: 0.2s;
   box-sizing: border-box;
 }
 .form-field input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0,122,255,0.15); background: #fff; }
-[data-theme="dark"] .form-field input { background: rgba(255,255,255,0.08); }
+[data-theme="dark"] .form-field input[type="text"], [data-theme="dark"] .form-field input[type="password"], [data-theme="dark"] .form-field input[type="number"] { background: rgba(255,255,255,0.08); }
 [data-theme="dark"] .form-field input:focus { background: rgba(255,255,255,0.12); }
 .form-field input:disabled { opacity: 0.55; cursor: not-allowed; }
 .form-hint { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
@@ -632,6 +633,13 @@ input:checked + .slider:before { transform: translateX(14px); }
       <div class="mac-btn zoom"></div>
     </div>
     <div class="mac-title">模型监控 | Model Dashboard</div>
+    <div style="position:absolute; right:16px; top:50%; transform:translateY(-50%); display:flex; align-items:center; gap:8px;">
+      <label class="switch-inline" title="开机自动启动">
+        <input type="checkbox" id="settingsAutostart" onchange="toggleAutostart(this.checked)">
+        <span class="slider-inline"></span>
+      </label>
+      <span id="autostartLabel" style="font-size:11px; color:var(--text-secondary); white-space:nowrap;">开机自启</span>
+    </div>
   </div>
   
   <div class="mac-content">
@@ -674,15 +682,21 @@ input:checked + .slider:before { transform: translateX(14px); }
           <button class="btn" onclick="openVisionConfig()" style="font-size: 12px; padding: 4px 10px;">🖼️ 识图配置</button>
         </div>
       </div>
-      <div class="copy-row">
+      <div class="copy-row" id="baseUrlRow" style="align-items:center;">
         <span>Base URL:</span>
-        <code id="localBaseUrl">http://127.0.0.1:8000/v1</code>
-        <button class="btn-copy" onclick="copyText(document.getElementById('localBaseUrl').innerText, this)">Copy</button>
+        <code id="localBaseUrl" style="flex:0 1 auto;min-width:0;">http://127.0.0.1:8000/v1</code>
+        <span id="baseUrlActions" style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto;">
+          <button class="btn-copy" onclick="editPortInline()">改端口</button>
+          <button class="btn-copy" onclick="copyText(document.getElementById('localBaseUrl').innerText, this)">复制</button>
+        </span>
       </div>
-      <div class="copy-row">
+      <div class="copy-row" style="align-items:center;">
         <span>API Key:</span>
-        <code>{{ local_api_key }}</code>
-        <button class="btn-copy" onclick="copyText('{{ local_api_key }}', this)">Copy</button>
+        <code id="apiKeyCode" style="flex:0 1 auto;min-width:0;">{{ local_api_key }}</code>
+        <span id="apiKeyActions" style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto;">
+          <button class="btn-copy" onclick="editApiKeyHome()">修改</button>
+          <button class="btn-copy" onclick="copyText(_currentApiKey, this)">复制</button>
+        </span>
       </div>
     </div>
     
@@ -763,7 +777,27 @@ input:checked + .slider:before { transform: translateX(14px); }
         </tbody>
       </table>
     </div>
+
+    <!-- 调用日志 -->
+    <h2 style="font-size:16px; font-weight:600; margin-top:24px; margin-bottom:12px;">📋 最近调用记录 <span style="font-size:12px;font-weight:400;color:var(--text-secondary);">（最多保留100条）</span></h2>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th width="100">时间</th>
+            <th width="60">状态</th>
+            <th>账号 · 模型</th>
+            <th width="100">Token</th>
+          </tr>
+        </thead>
+        <tbody id="callLogBody">
+          <tr><td colspan="4" class="empty">暂无调用记录</td></tr>
+        </tbody>
+      </table>
+    </div>
     </div> <!-- end usage-view -->
+
+    <!-- settings-view removed - settings now in monitor page -->
   </div>
 </div>
 
@@ -993,8 +1027,9 @@ input:checked + .slider:before { transform: translateX(14px); }
 <script>
 /* ============ 鉴权与 fetch 封装 ============ */
 const TOKEN_KEY = 'gateway_admin_token';
-function getToken() { return "{{ local_api_key }}"; }
-function setToken(t) {}
+let _currentApiKey = "{{ local_api_key }}";
+function getToken() { return _currentApiKey; }
+function setToken(t) { _currentApiKey = t; }
 function clearToken() {}
 
 function showGate() {}
@@ -1086,7 +1121,7 @@ async function load() {
           <div class="copy-row">
             <span>Base URL:</span>
             <code>${p.base_url}</code>
-            <button class="btn-copy" onclick="copyText('${p.base_url}', this)">Copy</button>
+            <button class="btn-copy" onclick="copyText('${p.base_url}', this)">复制</button>
           </div>
           <div class="copy-row">
             <span>API Key:</span>
@@ -1150,6 +1185,7 @@ function switchUsageTab(days) {
     b.classList.toggle('btn-primary', Number(b.dataset.days) === days);
   });
   loadUsage();
+  loadCallLog();
 }
 function fmtNum(n) {
   n = n || 0;
@@ -1286,13 +1322,16 @@ async function updatePollStatus() {
   try {
     const r = await apiFetch('/api/poll-status');
     const d = await r.json();
+    const stageMap = { 'init':'初始化中…', 'waiting':'准备检测…', 'fetching_models':'正在获取模型列表…', 'running':'检测中…', 'idle':'待命中' };
+    const stageText = stageMap[d.stage] || '';
+    const pollProg = d.poll_count !== undefined ? `（第${Math.min(d.poll_count, d.poll_max)}/${d.poll_max}次）` : '';
     if (d.last_poll_time > 0) {
       const date = new Date(d.last_poll_time * 1000);
       const pad = n => String(n).padStart(2, '0');
       const timeStr = `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-      document.getElementById('pollStatus').innerHTML = `上次同步：<span style="color:var(--text-primary);font-weight:500">${timeStr}</span> <span style="margin:0 8px;color:rgba(255,255,255,0.2)">|</span> 已扫描 <span style="color:var(--text-primary);font-weight:500">${d.total_models}</span> 个模型`;
+      document.getElementById('pollStatus').innerHTML = `上次同步：<span style="color:var(--text-primary);font-weight:500">${timeStr}</span> ${pollProg} <span style="margin:0 8px;color:rgba(255,255,255,0.2)">|</span> 已扫描 <span style="color:var(--text-primary);font-weight:500">${d.total_models}</span> 个模型`;
     } else {
-      document.getElementById('pollStatus').textContent = `初始化中… ${d.total_models} 个模型待扫描`;
+      document.getElementById('pollStatus').textContent = `${stageText} ${d.total_models} 个模型待扫描`;
     }
   } catch (e) {
     if (e.message !== 'Unauthorized') {}
@@ -1551,7 +1590,7 @@ async function deleteProvider(name) {
 }
 
 /* ============ 轮询与可见性 ============ */
-let loadTimer = null, pollTimer = null, detailTimer = null;
+let loadTimer = null, pollTimer = null, detailTimer = null, callLogTimer = null;
 async function loadModelDetails() {
   try {
     const r = await apiFetch('/api/model-details');
@@ -1563,14 +1602,20 @@ function startPolling() {
   if (loadTimer) clearInterval(loadTimer);
   if (pollTimer) clearInterval(pollTimer);
   if (detailTimer) clearInterval(detailTimer);
+  if (callLogTimer) clearInterval(callLogTimer);
   loadTimer = setInterval(load, 5000);
   pollTimer = setInterval(updatePollStatus, 3000);
   detailTimer = setInterval(loadModelDetails, 30000);
+  callLogTimer = setInterval(() => {
+    var uv = document.getElementById('usage-view');
+    if (uv && uv.style.display !== 'none') loadCallLog();
+  }, 5000);
 }
 function stopPolling() {
   if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (detailTimer) { clearInterval(detailTimer); detailTimer = null; }
+  if (callLogTimer) { clearInterval(callLogTimer); callLogTimer = null; }
 }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopPolling();
@@ -1583,37 +1628,30 @@ function switchMainTab(tab) {
   const monitorView = document.getElementById('monitor-view');
   const usageView = document.getElementById('usage-view');
   
+  [monitorBtn, usageBtn].forEach(b => {
+    b.style.background = 'transparent';
+    b.style.boxShadow = 'none';
+    b.style.color = 'var(--text-secondary)';
+    b.style.fontWeight = '500';
+  });
+  [monitorView, usageView].forEach(v => { if(v) v.style.display = 'none'; });
+  
   if (tab === 'monitor') {
-    monitorBtn.style.background = 'var(--mac-window-bg)';
-    monitorBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-    monitorBtn.style.color = 'var(--text-primary)';
-    monitorBtn.style.fontWeight = '600';
-    
-    usageBtn.style.background = 'transparent';
-    usageBtn.style.boxShadow = 'none';
-    usageBtn.style.color = 'var(--text-secondary)';
-    usageBtn.style.fontWeight = '500';
-    
+    highlightTabBtn(monitorBtn);
     monitorView.style.display = 'block';
-    usageView.style.display = 'none';
-  } else {
-    usageBtn.style.background = 'var(--mac-window-bg)';
-    usageBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-    usageBtn.style.color = 'var(--text-primary)';
-    usageBtn.style.fontWeight = '600';
-    
-    monitorBtn.style.background = 'transparent';
-    monitorBtn.style.boxShadow = 'none';
-    monitorBtn.style.color = 'var(--text-secondary)';
-    monitorBtn.style.fontWeight = '500';
-    
-    monitorView.style.display = 'none';
+  } else if (tab === 'usage') {
+    highlightTabBtn(usageBtn);
     usageView.style.display = 'block';
-    
-    if (document.getElementById('usageOverview').innerHTML === '') {
-      loadUsage();
-    }
+    if (document.getElementById('usageOverview').innerHTML === '') loadUsage();
+    loadCallLog();
   }
+}
+
+function highlightTabBtn(btn) {
+  btn.style.background = 'var(--mac-window-bg)';
+  btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+  btn.style.color = 'var(--text-primary)';
+  btn.style.fontWeight = '600';
 }
 
 /* ============ 路由配置 ============ */
@@ -2291,12 +2329,204 @@ function closeUpdateModal() {
   if (_updatePollTimer) { clearInterval(_updatePollTimer); _updatePollTimer = null; }
 }
 
+/* ============ 首页设置项 ============ */
+
+function editApiKeyHome() {
+  const code = document.getElementById('apiKeyCode');
+  const row = code.closest('.copy-row');
+  const btns = row.querySelectorAll('button');
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = _currentApiKey;
+  input.style.cssText = 'font-family:ui-monospace,monospace;font-size:13px;border:1px solid var(--accent-primary);border-radius:4px;padding:2px 8px;flex:1;min-width:200px;background:var(--mac-window-bg);color:var(--text-primary);outline:none;';
+  
+  code.replaceWith(input);
+  btns.forEach(b => b.style.display = 'none');
+  input.focus(); input.select();
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-copy';
+  saveBtn.textContent = '保存';
+  saveBtn.onclick = async () => {
+    const newKey = input.value.trim();
+    if (!newKey) { showToast('密码不能为空', 'error'); return; }
+    try {
+      const r = await apiFetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ local_api_key: newKey })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        _currentApiKey = newKey;
+        restoreApiKeyDisplay(input, row, btns);
+        saveBtn.remove(); cancelBtn.remove();
+        showToast('密码已更新，请在所有客户端同步修改', 'ok');
+      } else {
+        showToast('密码保存失败', 'error');
+      }
+    } catch(e) {
+      if (e.message !== 'Unauthorized') showToast('保存失败: ' + e.message, 'error');
+    }
+  };
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-copy';
+  cancelBtn.textContent = '取消';
+  cancelBtn.onclick = () => {
+    restoreApiKeyDisplay(input, row, btns);
+    saveBtn.remove(); cancelBtn.remove();
+  };
+
+  row.appendChild(saveBtn);
+  row.appendChild(cancelBtn);
+}
+
+function restoreApiKeyDisplay(input, row, btns) {
+  const code = document.createElement('code');
+  code.id = 'apiKeyCode';
+  code.textContent = _currentApiKey;
+  input.replaceWith(code);
+  btns.forEach(b => b.style.display = '');
+}
+
+function editPortInline() {
+  const actions = document.getElementById('baseUrlActions');
+  const currentPort = window.location.port || '8000';
+
+  // 替换右侧按钮区为编辑区
+  actions.innerHTML = '';
+
+  const warn = document.createElement('span');
+  warn.style.cssText = 'font-size:11px;color:var(--danger);white-space:nowrap;';
+  warn.textContent = '⚠ 改端口后所有工具地址需同步更新';
+  actions.appendChild(warn);
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.value = currentPort;
+  input.min = 1024; input.max = 65535;
+  input.style.cssText = 'width:68px;padding:2px 6px;font-size:12px;font-family:ui-monospace,monospace;border:1px solid var(--accent-primary);border-radius:4px;background:var(--mac-window-bg);color:var(--text-primary);outline:none;text-align:center;flex-shrink:0;';
+  actions.appendChild(input);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-copy';
+  saveBtn.textContent = '确定';
+  saveBtn.style.whiteSpace = 'nowrap';
+  saveBtn.onclick = async () => {
+    const newPort = parseInt(input.value, 10);
+    if (!newPort || newPort < 1024 || newPort > 65535) { showToast('端口范围: 1024-65535', 'error'); return; }
+    if (String(newPort) === currentPort) { restorePortEdit(); return; }
+    if (!confirm('修改端口为 ' + newPort + '？\n\n⚠️ 所有对接工具（ChatGPT/Codex、ChatBox 等）\n的地址都需从 ' + currentPort + ' 改为 ' + newPort + '\n\n程序将自动重启。')) return;
+    try {
+      await apiFetch('/api/port', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({port:newPort}) });
+      showToast('端口已保存，程序即将重启...', 'ok');
+      setTimeout(() => { window.location.href = window.location.protocol + '//127.0.0.1:' + newPort + '/'; }, 3000);
+    } catch(e) {
+      setTimeout(() => { window.location.href = window.location.protocol + '//127.0.0.1:' + newPort + '/'; }, 2500);
+    }
+  };
+  actions.appendChild(saveBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-copy';
+  cancelBtn.textContent = '取消';
+  cancelBtn.style.whiteSpace = 'nowrap';
+  cancelBtn.onclick = () => restorePortEdit();
+  actions.appendChild(cancelBtn);
+
+  input.focus(); input.select();
+}
+
+function restorePortEdit() {
+  const actions = document.getElementById('baseUrlActions');
+  actions.innerHTML = '';
+  const editBtn = document.createElement('button');
+  editBtn.className = 'btn-copy';
+  editBtn.textContent = '改端口';
+  editBtn.style.whiteSpace = 'nowrap';
+  editBtn.onclick = function(){ editPortInline(); };
+  actions.appendChild(editBtn);
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'btn-copy';
+  copyBtn.textContent = '复制';
+  copyBtn.style.whiteSpace = 'nowrap';
+  copyBtn.onclick = function(){ copyText(document.getElementById('localBaseUrl').innerText, this); };
+  actions.appendChild(copyBtn);
+}
+
+async function loadCallLog() {
+  try {
+    const r = await apiFetch('/api/call-log');
+    const data = await r.json();
+    const tbody = document.getElementById('callLogBody');
+    if (!data || !data.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无调用记录</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.slice().reverse().map(d => {
+      const stIcon = d.status === 'ok' ? '✅' : '❌';
+      const stColor = d.status === 'ok' ? 'var(--success)' : 'var(--danger)';
+      const tokens = d.tokens ? fmtTokens(d.tokens) : '-';
+      const err = d.error ? ` <span style="font-size:11px;color:${stColor};">(${d.error})</span>` : '';
+      return `<tr>
+        <td style="font-size:12px;color:var(--text-secondary);">${d.time}</td>
+        <td><span style="font-size:16px;">${stIcon}</span>${err}</td>
+        <td>
+          <span class="model-provider-badge">${d.provider || '-'}</span>
+          <span style="font-size:13px;">${d.model || '-'}</span>
+        </td>
+        <td style="font-size:12px;color:var(--text-secondary);font-variant-numeric:tabular-nums;">${tokens}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    if (e.message !== 'Unauthorized') console.error("loadCallLog failed:", e);
+  }
+}
+
+function fmtTokens(n) {
+  if (n >= 10000) return (n/10000).toFixed(1).replace(/\.0$/,'') + ' 万';
+  return n.toLocaleString();
+}
+
+async function toggleAutostart(enabled) {
+  try {
+    const r = await apiFetch('/api/autostart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('autostartLabel').textContent = enabled ? '已开启' : '开机自启';
+      showToast(enabled ? '已设置开机自启动' : '已取消开机自启动', 'ok');
+    } else {
+      document.getElementById('settingsAutostart').checked = !enabled;
+      showToast('操作失败', 'error');
+    }
+  } catch (e) {
+    document.getElementById('settingsAutostart').checked = !enabled;
+    if (e.message !== 'Unauthorized') showToast('操作失败: ' + e.message, 'error');
+  }
+}
+
 /* ============ 启动 ============ */
 function startApp() {
   loadModelDetails(); load(); updatePollStatus(); startPolling();
+  loadAutostart();  // 加载开机自启状态
   openFeishuModal();
   setTimeout(function(){ checkUpdate(true); }, 2000);
   setTimeout(startAnnouncementWatcher, 5000);
+}
+
+async function loadAutostart() {
+  try {
+    const r = await apiFetch('/api/autostart');
+    const d = await r.json();
+    document.getElementById('settingsAutostart').checked = d.enabled;
+    document.getElementById('autostartLabel').textContent = d.enabled ? '已开启' : '开机自启';
+  } catch (e) {}
 }
 startApp();
 </script>
