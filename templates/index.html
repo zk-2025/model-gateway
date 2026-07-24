@@ -782,6 +782,7 @@ input:checked + .slider:before { transform: translateX(14px); }
             <th width="150">时间</th>
             <th width="100">提供商</th>
             <th>模型</th>
+            <th width="60">路由分</th>
             <th width="80">输入Token</th>
             <th width="80">输出Token</th>
             <th width="80">合计Token</th>
@@ -1351,7 +1352,11 @@ async function updatePollStatus() {
       const date = new Date(d.last_poll_time * 1000);
       const pad = n => String(n).padStart(2, '0');
       const timeStr = `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-      document.getElementById('pollStatus').innerHTML = `上次同步：<span style="color:var(--text-primary);font-weight:500">${timeStr}</span> <span style="margin:0 8px;color:rgba(255,255,255,0.2)">|</span> 已扫描 <span style="color:var(--text-primary);font-weight:500">${d.total_models}</span> 个模型`;
+      const statusText = d.status && d.status.startsWith('sleeping')
+        ? ` <span style="color:var(--warning);font-size:12px;">⏰ 非工作时间，等待到 ${d.status.match(/(\d+):00/)?.[1]||'7'}:00 恢复</span>`
+        : '';
+      const readyBadge = d.ready ? ' <span style="display:inline-block;padding:0 8px;border-radius:4px;background:var(--success);color:#fff;font-size:11px;font-weight:600;margin-left:8px;">⭕️ 就绪</span>' : '';
+      document.getElementById('pollStatus').innerHTML = `上次同步：<span style="color:var(--text-primary);font-weight:500">${timeStr}</span> <span style="margin:0 8px;color:rgba(255,255,255,0.2)">|</span> 已扫描 <span style="color:var(--text-primary);font-weight:500">${d.total_models}</span> 个模型${statusText}${readyBadge}`;
     } else {
       document.getElementById('pollStatus').textContent = `初始化中… ${d.total_models} 个模型待扫描`;
     }
@@ -1687,19 +1692,22 @@ function renderLogs(data) {
   const rows = data.logs || [];
   const tbody = document.getElementById('logBody');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无调用记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无调用记录</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
-    const dur = r.duration ? r.duration.toFixed(2) : '--';
-    const tps = r.tps ? r.tps.toFixed(2) : '--';
-    return `<tr>
+    const isFail = r.status === 'fail';
+    const dur = isFail ? '--' : (r.duration ? r.duration.toFixed(2) : '--');
+    const tps = isFail ? '--' : (r.tps ? r.tps.toFixed(2) : '--');
+    const routingScore = r.routing_score !== undefined ? r.routing_score : '--';
+    return `<tr${isFail ? ' style="color:var(--danger);"' : ''}>
       <td style="font-size:12px;white-space:nowrap;">${r.time}</td>
       <td><span class="model-provider-badge">${r.provider}</span></td>
-      <td><div class="model-name">${r.model}</div></td>
-      <td>${r.pt}</td>
-      <td>${r.ct}</td>
-      <td>${r.tt}</td>
+      <td><div class="model-name">${isFail ? '❌ ' : ''}${r.model}</div></td>
+      <td style="font-size:12px;">${routingScore}%</td>
+      <td>${isFail ? '--' : r.pt}</td>
+      <td>${isFail ? '--' : r.ct}</td>
+      <td>${isFail ? '--' : r.tt}</td>
       <td>${dur}</td>
       <td>${tps}</td>
     </tr>`;
@@ -1716,6 +1724,7 @@ function fmtCtx(n) {
 let routersData = {};
 let allModelOptions = [];   // [{provider, model}]
 let currentRouterName = null; // 当前选中的路由组名
+let routingQualityScores = {}; // 路由质量分缓存 {provider||model: score}
 
 async function loadVisionAssist() {
   try {
@@ -1769,6 +1778,11 @@ async function openRouterManager() {
     const d = await r.json();
     routersData = d.data || {};
   } catch (e) { if (e.message !== 'Unauthorized') console.error(e); routersData = {}; }
+  // 3. 拉取路由质量分
+  try {
+    const r = await apiFetch('/api/quality-scores');
+    routingQualityScores = await r.json();
+  } catch (e) { routingQualityScores = {}; }
   renderRouterList();
   if (Object.keys(routersData).length > 0) {
     selectRouterGroup(Object.keys(routersData)[0]);
@@ -1876,12 +1890,16 @@ function renderRouterModels() {
     // 从 stabilityData 获取状态
     const sd = (stabilityData || []).find(d => d.model === opt.model && d.provider === opt.provider);
     const pct = sd ? (typeof sd.availability === 'number' ? sd.availability.toFixed(1) : parseFloat(sd.availability || 0).toFixed(1)) : '--';
+    const lat = sd ? (sd.avg_latency_ms !== null ? Math.round(sd.avg_latency_ms) + 'ms' : '--') : '--';
     const dotColor = sd ? (pct >= 90 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)') : 'var(--unknown)';
     return `<label class="model-checkbox-item" style="padding:6px 8px;margin-bottom:2px;">
       <input type="checkbox" class="router-model-cb" data-router="${currentRouterName}" value="${opt.model}" ${checked ? 'checked' : ''} onchange="onRouterModelToggle()">
       <div class="model-checkbox-label" style="font-size:13px;">
         <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:6px;flex-shrink:0;"></span>
         <span class="model-provider-badge">${opt.provider}</span>${opt.model}<span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">${ctxStr}</span>
+        <span style="color:${dotColor};font-size:11px;margin-left:4px;font-weight:500;">${pct}%</span>
+        <span style="color:var(--text-secondary);font-size:10px;margin-left:2px;">${lat}</span>
+        <span style="color:var(--accent-primary);font-size:10px;margin-left:2px;font-weight:500;">${(routingQualityScores[opt.provider+'||'+opt.model] || '--') + '%'}</span>
       </div>
     </label>`;
   }).join('');
@@ -1895,12 +1913,14 @@ function onRouterModelToggle() {
     document.querySelectorAll(`.router-model-cb[data-router="${currentRouterName}"]:checked`).forEach(cb => {
       checkedCount[cb.value] = (checkedCount[cb.value] || 0) + 1;
     });
-    // 对于被筛选遮挡的模型，保留其原有的勾选次数
+    // 对于被筛选遮挡的模型，保留其原有的勾选次数（上限为模型在列表中出现的次数）
+    const maxModelCount = {};
+    allModelOptions.forEach(opt => { maxModelCount[opt.model] = (maxModelCount[opt.model] || 0) + 1; });
     const hiddenCount = {};
     routersData[currentRouterName].forEach(m => {
       // 只有不在可见列表中的模型才保留
       if (!document.querySelector(`.router-model-cb[data-router="${currentRouterName}"][value="${m}"]`)) {
-        hiddenCount[m] = (hiddenCount[m] || 0) + 1;
+        hiddenCount[m] = Math.min((hiddenCount[m] || 0) + 1, maxModelCount[m] || 1);
       }
     });
     // 合并可见和隐藏的勾选结果
@@ -1952,11 +1972,13 @@ async function saveRouters() {
     visibleCount[cb.value] = (visibleCount[cb.value] || 0) + 1;
   });
 
-  // 对于被筛选遮挡的模型，保留其原有的勾选次数
+  // 对于被筛选遮挡的模型，保留其原有的勾选次数（上限为模型在列表中出现的次数，避免重复模型名计数膨胀）
+  const maxModelCount = {};
+  allModelOptions.forEach(opt => { maxModelCount[opt.model] = (maxModelCount[opt.model] || 0) + 1; });
   const hiddenCount = {};
   routersData[currentRouterName].forEach(m => {
     if (!document.querySelector(`.router-model-cb[data-router="${currentRouterName}"][value="${m}"]`)) {
-      hiddenCount[m] = (hiddenCount[m] || 0) + 1;
+      hiddenCount[m] = Math.min((hiddenCount[m] || 0) + 1, maxModelCount[m] || 1);
     }
   });
 
@@ -2000,20 +2022,24 @@ async function openVisionConfig() {
     providers.forEach(p => (p.models || []).forEach(m => opts.push({ provider: p.name, model: m })));
     routersData = rr.data || {};
     _visionModelSet = new Set(vr.data || []);
-    const selected = new Set(routersData['识图'] || []);
+    const selectedList = routersData['识图'] || [];
+    const selectedCount = {};
+    selectedList.forEach(m => { selectedCount[m] = (selectedCount[m] || 0) + 1; });
     if (!opts.length) {
       list.innerHTML = '<div class="empty" style="color:var(--danger)">未获取到模型，请先在一键配置或上游管理对接 API Key</div>';
       return;
     }
     opts.sort((a, b) => (_visionModelSet.has(b.model) ? 1 : 0) - (_visionModelSet.has(a.model) ? 1 : 0));
+    const remainingCount = { ...selectedCount };
     list.innerHTML = opts.map(opt => {
-      const checked = selected.has(opt.model) ? 'checked' : '';
+      const checked = (remainingCount[opt.model] || 0) > 0;
+      if (checked) remainingCount[opt.model]--;
       return `<label class="model-checkbox-item">
-        <input type="checkbox" class="vision-cb" value="${opt.model}" ${checked}>
+        <input type="checkbox" class="vision-cb" value="${opt.model}" ${checked ? 'checked' : ''}>
         <div class="model-checkbox-label"><span class="model-provider-badge">${opt.provider}</span>${opt.model}</div>
       </label>`;
     }).join('');
-    document.getElementById('visionCount').textContent = '已选 ' + selected.size + ' · 共 ' + opts.length + ' 个模型';
+    document.getElementById('visionCount').textContent = '已选 ' + new Set(selectedList).size + ' · 共 ' + opts.length + ' 个模型';
   } catch (e) {
     list.innerHTML = '<div class="empty" style="color:var(--danger)">加载失败：' + e.message + '</div>';
   }
