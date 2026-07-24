@@ -3,6 +3,7 @@ import asyncio
 import time
 import os
 import logging
+import random
 import hashlib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -28,6 +29,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger("gateway")
+# 压制 httpx 的 INFO 日志（公告拉取等请求噪音）
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ============================================================
 # 路径与常量
@@ -49,7 +52,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30
@@ -71,15 +74,58 @@ def atomic_write(path: Path, content: str):
 
 
 # ============================================================
+# 配置说明（写入 config.json 作为备注）
+# ============================================================
+CONFIG_NOTE = (
+    "========== 使用说明 ==========\n"
+    "【三种模式切换】\n"
+    "  🔒 安全模式（默认）：删除 local_api_key 整个字段，重启后自动生成随机 Key\n"
+    "  🔓 开放模式：将 local_api_key 的值设为空字符串 \"\"，任意 API Key 均可通信\n"
+    "  🔒 自定义 Key：在 local_api_key 中填入你的密钥，必须匹配才能通信\n"
+    "【端口配置】\n"
+    "  修改 port 字段即可，默认 8000\n"
+    "【轮询配置】\n"
+    "  poll_interval：轮询间隔（秒），默认 3600（1 小时）\n"
+    "  poll_work_start：工作时间开始（小时），默认 7\n"
+    "  poll_work_end：工作时间结束（小时），默认 21\n"
+    "  poll_daily_limit：每日轮询次数上限，默认 20，超过后改为每天 12:00 一次\n"
+    "=============================="
+)
+
+
+# ============================================================
 # 配置加载
 # ============================================================
 def load_config():
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        cfg.setdefault("port", 8000)
+        cfg.setdefault("_note", CONFIG_NOTE)
+        # 轮询配置默认值
+        cfg.setdefault("poll_interval", 3600)
+        cfg.setdefault("poll_work_start", 7)
+        cfg.setdefault("poll_work_end", 21)
+        cfg.setdefault("poll_daily_limit", 20)
+        # 三种模式：
+        # ① local_api_key 字段不存在 → 自动生成随机 Key（安全模式）
+        # ② local_api_key 为空字符串 "" → 开放模式（任意 Key 放行）
+        # ③ local_api_key 有具体值 → 安全模式（必须匹配）
+        if "local_api_key" not in cfg:
+            cfg["local_api_key"] = "sk-local-" + secrets.token_hex(16)
+            atomic_write(CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
+        elif not cfg["local_api_key"]:
+            cfg["local_api_key"] = None
+        return cfg
     data = {
+        "_note": CONFIG_NOTE,
         "local_api_key": "sk-local-" + secrets.token_hex(16),
+        "port": 8000,
+        "poll_interval": 3600,
+        "poll_work_start": 7,
+        "poll_work_end": 21,
+        "poll_daily_limit": 20,
     }
-    atomic_write(CONFIG_FILE, json.dumps(data, indent=2))
+    atomic_write(CONFIG_FILE, json.dumps(data, ensure_ascii=False, indent=2))
     return data
 
 
@@ -161,6 +207,9 @@ security = HTTPBearer(auto_error=False)
 
 def verify_client(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """客户端调用 /v1/* 的鉴权"""
+    # 未配置 API Key 时，接受任意 Key（开放模式）
+    if not LOCAL_API_KEY:
+        return credentials
     if not credentials or credentials.credentials != LOCAL_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API Key")
     return credentials
@@ -168,6 +217,9 @@ def verify_client(credentials: HTTPAuthorizationCredentials = Depends(security))
 
 def verify_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """管理面板调用 /api/* 的鉴权，直接使用 local_api_key"""
+    # 未配置 API Key 时，接受任意 Key（开放模式）
+    if not LOCAL_API_KEY:
+        return credentials
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing credentials")
     if credentials.credentials != LOCAL_API_KEY:
@@ -183,6 +235,10 @@ health_status: dict = {}
 model_details: dict = {}
 model_quality: dict = {}          # key -> {ok, fail, error, latencies: deque}
 circuit_breaker: dict = {}        # key -> {fails, open_until}
+model_session_count: dict = {}    # key -> 本轮对话中的调用次数
+model_last_called: dict = {}      # key -> 最后一次成功调用的时间
+_last_random_boosts: dict = {}    # key -> 当前轮次的随机偏移（-5%~+5%）
+_last_boost_time: float = 0       # 上次生成随机偏移的时间
 providers_lock = asyncio.Lock()
 history_lock = asyncio.Lock()
 usage_lock = asyncio.Lock()
@@ -417,10 +473,10 @@ def update_model_quality(key: str, info: dict):
 
 
 def get_quality_score(key: str) -> float:
-    """0~1 可用率，无数据返回 1.0（乐观）"""
+    """0~1 可用率，无数据返回 0.5（中性，避免新模型排在已稳定的模型前面）"""
     q = model_quality.get(key)
     if not q or not q["status_window"]:
-        return 1.0
+        return 0.5
     ok_count = sum(1 for s in q["status_window"] if s == "ok")
     return ok_count / len(q["status_window"])
 
@@ -452,6 +508,16 @@ def record_fail(key: str):
     if cb["fails"] >= CIRCUIT_FAIL_THRESHOLD:
         cb["open_until"] = time.time() + CIRCUIT_RECOVERY_SECONDS
         logger.warning("circuit opened: %s", key)
+    update_model_quality(key, {"status": "fail"})
+    _append_history_sync({key: {"status": "fail", "checked_at": time.time()}})
+    # 写入调用日志（失败记录）
+    parts = key.split("||", 1)
+    _append_usage_sync({
+        "ts": time.time(), "model": parts[1] if len(parts) > 1 else key,
+        "provider": parts[0] if len(parts) > 1 else "unknown",
+        "pt": 0, "ct": 0, "tt": 0, "duration": 0, "tps": 0,
+        "status": "fail",
+    })
 
 
 def record_success(key: str):
@@ -459,6 +525,11 @@ def record_success(key: str):
     if cb:
         cb["fails"] = 0
         cb["open_until"] = 0
+    update_model_quality(key, {"status": "ok"})
+    _append_history_sync({key: {"status": "ok", "checked_at": time.time()}})
+    # 记录模型调用计数和最后调用时间（用于随机轮换）
+    model_session_count[key] = model_session_count.get(key, 0) + 1
+    model_last_called[key] = time.time()
 
 
 # ============================================================
@@ -618,25 +689,119 @@ async def poll_all():
         except Exception:
             logger.exception("initial model_details fetch failed: %s", p.get("name"))
 
-    while True:
+    # 按模型独立计数——从历史记录中读取每个模型被轮询的次数
+    # 注意：仅统计轮询产生的记录（一行中有多个模型的状态），不统计请求失败记录
+    model_poll_count: dict[str, int] = {}
+    if HISTORY_FILE.exists():
         try:
-            tasks = []
-            for p in list(providers):
-                for m in get_enabled_models(p):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as _f:
+                for line in _f:
+                    try:
+                        rec = json.loads(line.strip())
+                        keys = list(rec.get("data", {}).keys())
+                        # 轮询记录：一行中有多个模型的状态
+                        # 请求失败记录：一行中只有1个模型
+                        if len(keys) > 1:
+                            for key in keys:
+                                model_poll_count[key] = model_poll_count.get(key, 0) + 1
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    while True:
+        now = time.localtime()
+
+        # 读取轮询配置
+        interval = app_config.get("poll_interval", 3600)
+        work_start = app_config.get("poll_work_start", 7)
+        work_end = app_config.get("poll_work_end", 21)
+        daily_limit = app_config.get("poll_daily_limit", 20)
+
+        current_hour = now.tm_hour
+
+        # 判断是否在工作时间
+        in_work_hours = work_start <= current_hour < work_end
+
+        if not in_work_hours:
+            # 非工作时间：标记上次轮询时间（避免 UI 一直显示"初始化中"）
+            if last_poll_time == 0:
+                last_poll_time = time.time()
+            # 计算下次工作开始时间，等待到那个时候
+            next_work = time.mktime((
+                now.tm_year, now.tm_mon, now.tm_mday,
+                work_start, 0, 0, now.tm_wday, now.tm_yday, now.tm_isdst
+            ))
+            if next_work <= time.time():
+                next_work += 86400  # 明天
+            wait_seconds = next_work - time.time()
+            logger.info("非工作时间，等待 %d 秒后恢复轮询", int(wait_seconds))
+            while time.time() < max(next_work, last_check_time + interval):
+                await asyncio.sleep(30)
+            continue
+
+        # 检测新增模型：不在 model_poll_count 中的模型，立即执行首次轮询
+        new_model_tasks = []
+        for p in list(providers):
+            for m in get_enabled_models(p):
+                key = f"{p['name']}||{m}"
+                if key not in model_poll_count:
+                    new_model_tasks.append((p["name"], m, p["base_url"], p["api_key"]))
+        if new_model_tasks:
+            try:
+                logger.info("检测到 %d 个新增模型，立即执行首次探测", len(new_model_tasks))
+                new_status = await run_health_checks(new_model_tasks)
+                health_status.update(new_status)
+                for key in new_status:
+                    model_poll_count[key] = model_poll_count.get(key, 0) + 1
+                await append_history(new_status)
+                logger.info("new model first poll done: %d models", len(new_status))
+            except Exception:
+                logger.exception("new model first poll failed")
+
+        # 构建本次要轮询的模型列表（只选未达到上限的）
+        tasks = []
+        for p in list(providers):
+            for m in get_enabled_models(p):
+                key = f"{p['name']}||{m}"
+                if model_poll_count.get(key, 0) < daily_limit:
                     tasks.append((p["name"], m, p["base_url"], p["api_key"]))
+
+        # 如果所有模型都已达到上限，改为每天 12:00 检测一次
+        if not tasks:
+            # 标记轮询已初始化，避免 UI 卡在"初始化中…"
+            if last_poll_time == 0:
+                last_poll_time = time.time()
+            noon_today = time.mktime((
+                now.tm_year, now.tm_mon, now.tm_mday,
+                12, 0, 0, now.tm_wday, now.tm_yday, now.tm_isdst
+            ))
+            if time.time() < noon_today:
+                wait_seconds = noon_today - time.time()
+            else:
+                wait_seconds = noon_today + 86400 - time.time()
+            logger.info("所有模型轮询已达 %d 次上限，改为每天 12:00 检测一次", daily_limit)
+            while time.time() < max(time.time() + wait_seconds, last_check_time + interval):
+                await asyncio.sleep(30)
+            continue
+
+        try:
             new_status = await run_health_checks(tasks)
             health_status = new_status
             last_poll_time = time.time()
             last_check_time = last_poll_time
+            for key in new_status:
+                model_poll_count[key] = model_poll_count.get(key, 0) + 1
             await append_history(new_status)
             await maybe_cleanup_history()
             ok_count = sum(1 for v in new_status.values() if v.get("status") == "ok")
-            logger.info("poll done: %d/%d ok", ok_count, len(new_status))
+            under_limit = sum(1 for c in model_poll_count.values() if c < daily_limit)
+            logger.info("poll done: %d/%d ok, 剩余 %d 个模型未达上限", ok_count, len(new_status), under_limit)
         except Exception:
             logger.exception("poll_all loop error")
-        # 等待到 last_check_time + POLL_INTERVAL；
+        # 等待到 last_check_time + interval；
         # 若手动检测更新了 last_check_time，则顺延，避免短时间内重复轮询
-        while time.time() < last_check_time + POLL_INTERVAL:
+        while time.time() < last_check_time + interval:
             await asyncio.sleep(5)
 
 
@@ -658,6 +823,19 @@ async def lifespan(app: FastAPI):
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
     app.state.http = http_client
+    # 启动时从历史记录回放所有记录到 model_quality（deque 自动控制最多 20 条）
+    # 确保路由质量分与 UI 显示的稳定度数据一致
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as _f:
+                lines = _f.readlines()
+            for line in lines:
+                rec = json.loads(line.strip())
+                for key, info in rec.get("data", {}).items():
+                    update_model_quality(key, info)
+            logger.info("replayed %d history lines into model_quality", len(lines))
+        except Exception:
+            logger.exception("replay history failed")
     poll_task = asyncio.create_task(poll_all())
     yield
     if poll_task:
@@ -721,11 +899,38 @@ class PresetApplyIn(BaseModel):
 # ============================================================
 # 模型选择
 # ============================================================
+def _effective_score(key: str) -> float:
+    """路由综合分 = 质量分 - 延迟惩罚 + 随机偏移"""
+    base = get_quality_score(key)
+    # 延迟惩罚：超过1秒的部分每1秒扣2%，最多扣0.3分（lat 单位：毫秒→秒）
+    lat = (get_avg_latency(key) or 0) / 1000
+    penalty = min(round(max(0, lat - 1) * 0.02, 4), 0.3)
+    boost = _last_random_boosts.get(key, 0)
+    result = base - penalty + boost
+    logger.info("ROUTE %s: base=%.2f penalty=%.2f boost=%.2f result=%.2f", key, base, penalty, boost, result)
+    return result
+
+
 def pick_available_models(model: str | None = None, force: bool = False) -> list[tuple[dict, str]]:
     """返回按质量排序的候选 (provider, model) 列表"""
     
     raw = []
     unhealthy_raw = []
+    
+    # 判断是否需要生成随机偏移（连续使用10次以上 + 闲置5分钟以上）
+    global _last_random_boosts, _last_boost_time
+    now = time.time()
+    needs_reshuffle = False
+    for key, count in list(model_session_count.items()):
+        if count >= 10 and now - model_last_called.get(key, now) > 300:
+            needs_reshuffle = True
+            break
+    if needs_reshuffle:
+        # 清空旧偏移，为新轮次生成随机偏移（-5%~+5%）
+        _last_random_boosts = {}
+        _last_boost_time = now
+        # 重置会话计数，避免每次请求都触发重新生成
+        model_session_count.clear()
     
     # 如果请求的是自定义路由组
     if model in ROUTERS:
@@ -734,9 +939,16 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
             for m in get_enabled_models(p):
                 if m in target_models:
                     k = f"{p['name']}||{m}"
-                    raw.append((p, m, k))
+                    if is_circuit_open(k):
+                        unhealthy_raw.append((p, m, k))
+                    else:
+                        raw.append((p, m, k))
+                        if needs_reshuffle:
+                            _last_random_boosts[k] = random.uniform(-0.05, 0.05)
+        if not raw:
+            raw = unhealthy_raw
         scored = [
-            (get_quality_score(k), get_avg_latency(k) or 1e9, p, m)
+            (_effective_score(k), get_avg_latency(k) or 1e9, p, m)
             for p, m, k in raw
         ]
         scored.sort(key=lambda x: (-x[0], x[1]))
@@ -751,16 +963,20 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
             k = f"{p['name']}||{m}"
             if force or model:
                 raw.append((p, m, k))
+                if needs_reshuffle:
+                    _last_random_boosts[k] = random.uniform(-0.05, 0.05)
                 continue
             st = health_status.get(k, {}).get("status")
             if not is_circuit_open(k) and st in ("ok", None, "unknown"):
                 raw.append((p, m, k))
+                if needs_reshuffle:
+                    _last_random_boosts[k] = random.uniform(-0.05, 0.05)
             else:
                 unhealthy_raw.append((p, m, k))
     if not raw:
         raw = unhealthy_raw
     scored = [
-        (get_quality_score(k), get_avg_latency(k) or 1e9, p, m)
+        (_effective_score(k), get_avg_latency(k) or 1e9, p, m)
         for p, m, k in raw
     ]
     scored.sort(key=lambda x: (-x[0], x[1]))
@@ -846,9 +1062,19 @@ async def index(request: Request):
 # ============================================================
 @app.get("/api/poll-status")
 async def poll_status(_=Depends(verify_admin)):
+    now = time.localtime()
+    ws = app_config.get("poll_work_start", 7)
+    we = app_config.get("poll_work_end", 21)
+    in_work = ws <= now.tm_hour < we
+    if last_poll_time > 0:
+        status_str = "working" if in_work else f"sleeping (work hours: {ws}:00-{we}:00)"
+    else:
+        status_str = "init"
     return {
         "last_poll_time": last_poll_time,
         "total_models": sum(len(get_enabled_models(p)) for p in providers),
+        "status": status_str,
+        "ready": last_poll_time > 0,
     }
 
 
@@ -951,6 +1177,40 @@ async def get_usage(days: int = 1, _=Depends(verify_admin)):
         for _, v in sorted(by_model.items(), key=lambda x: -x[1]["tt"])
     ]
     return {"days": days, "total": total, "by_day": by_day_list, "by_model": by_model_list}
+
+
+@app.get("/api/usage-logs")
+async def get_usage_logs(days: int = 1, _=Depends(verify_admin)):
+    """返回模型调用日志，含耗时和 TPS"""
+    days = max(1, min(days, MAX_USAGE_DAYS))
+    records = await read_usage(days)
+    # 按时间倒序排列
+    records.sort(key=lambda r: r.get("ts", 0), reverse=True)
+    logs = []
+    for r in records:
+        ts = r.get("ts", 0)
+        dur = r.get("duration", 0)
+        tps = r.get("tps", 0)
+        logs.append({
+            "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+            "provider": r.get("provider", "unknown"),
+            "model": r.get("model", "unknown"),
+            "pt": r.get("pt", 0),
+            "ct": r.get("ct", 0),
+            "tt": r.get("tt", 0),
+            "duration": dur,
+            "tps": tps,
+            "status": r.get("status", "ok"),
+            "routing_score": round(get_quality_score(f"{r.get('provider', '')}||{r.get('model', '')}") * 100, 1),
+        })
+    return {"days": days, "total": len(logs), "logs": logs}
+
+
+@app.get("/api/quality-scores")
+async def get_quality_scores(_=Depends(verify_admin)):
+    """返回所有模型的路由质量分（滑动窗口），前端可与 UI 统计分对比"""
+    keys = list(model_quality.keys())
+    return {key: round(get_quality_score(key) * 100, 1) for key in sorted(keys)}
 
 
 @app.get("/api/model-details")
@@ -1097,7 +1357,7 @@ async def get_announcement(_=Depends(verify_admin)):
 
 
 # ---------- 在线更新 ----------
-VERSION_CHECK_URL = "https://gitee.com/ywtc000/dongye/raw/master/version.json"
+VERSION_CHECK_URL = ""
 _update_download_state = {
     "downloading": False,
     "progress": 0,
@@ -1664,7 +1924,7 @@ def _inject_cn_hint(body: dict):
 # ============================================================
 # 代理（客户端鉴权）
 # ============================================================
-async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
+async def _stream_with_failover(candidates, body, is_router, prelude: str = "", start_time: float = 0):
     """流式转发，中断时自动切换下一个候选模型继续输出。prelude 为先输出给用户的提示文本。"""
 
     async def gen():
@@ -1757,10 +2017,14 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     try:
                         pt = (usage_obj or {}).get("prompt_tokens", 0) or 0
                         ct = (usage_obj or {}).get("completion_tokens", 0) or 0
+                        tt = pt + ct
+                        dur = time.time() - start_time if start_time else 0
                         await append_usage({
                             "ts": time.time(), "model": model,
                             "provider": provider["name"],
-                            "pt": pt, "ct": ct, "tt": pt + ct,
+                            "pt": pt, "ct": ct, "tt": tt,
+                            "duration": round(dur, 2),
+                            "tps": round(ct / dur, 2) if dur > 0 and ct > 0 else 0,
                         })
                     except Exception:
                         logger.exception("append_usage(stream) failed")
@@ -1816,12 +2080,13 @@ async def proxy_chat(request: Request, force: bool = False):
     if not candidates:
         raise HTTPException(503, f"无可用的模型: {requested_model or '任意'}")
 
+    _start_time = time.time()
     is_router = requested_model in ROUTERS
     stream = body.get("stream", False)
     last_err = None
 
     if stream:
-        return await _stream_with_failover(candidates, body, is_router, prelude=vision_prelude)
+        return await _stream_with_failover(candidates, body, is_router, prelude=vision_prelude, start_time=_start_time)
 
     for attempt in (2,) if is_router else (1,):
         for provider, model in candidates:
@@ -1853,10 +2118,14 @@ async def proxy_chat(request: Request, force: bool = False):
                         u = parsed.get("usage") or {}
                         pt = u.get("prompt_tokens", 0) or 0
                         ct = u.get("completion_tokens", 0) or 0
+                        tt = pt + ct
+                        dur = time.time() - _start_time if '_start_time' in dir() else 0
                         await append_usage({
                             "ts": time.time(), "model": model,
                             "provider": provider["name"],
-                            "pt": pt, "ct": ct, "tt": pt + ct,
+                            "pt": pt, "ct": ct, "tt": tt,
+                            "duration": round(dur, 2),
+                            "tps": round(ct / dur, 2) if dur > 0 and ct > 0 else 0,
                         })
                     except Exception:
                         logger.exception("append_usage(non-stream) failed")
@@ -1982,10 +2251,11 @@ if __name__ == "__main__":
             pass
         return False
 
+    SERVER_PORT = app_config.get("port", 8000)
     AUTO_KILL = os.environ.get("GATEWAY_AUTO_KILL") == "1"
 
-    if AUTO_KILL and port_in_use(8000):
-        kill_old_instance(8000)
+    if AUTO_KILL and port_in_use(SERVER_PORT):
+        kill_old_instance(SERVER_PORT)
         time.sleep(1.5)
 
     # 文件锁：真实客户端靠它拦截重复启动；测试模式端口已清，锁也能正常获取
@@ -2038,7 +2308,7 @@ if __name__ == "__main__":
 
     # ---- FastAPI 服务器（daemon 线程，主进程退出时自动结束） ----
     def start_server():
-        uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+        uvicorn.run(app, host="127.0.0.1", port=SERVER_PORT, log_level="warning")
 
     t = threading.Thread(target=start_server, daemon=True)
     t.start()
@@ -2048,7 +2318,7 @@ if __name__ == "__main__":
 
     # ---- 创建原生的桌面窗口 ----
     window = webview.create_window(
-        '无限额度监控网关', 'http://127.0.0.1:8000/', width=1200, height=800
+        '无限额度监控网关', f'http://127.0.0.1:{SERVER_PORT}/', width=1200, height=800
     )
     state["window"] = window
 
