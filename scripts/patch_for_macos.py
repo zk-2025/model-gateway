@@ -10,9 +10,7 @@ macOS 打包前临时 patch：让 Windows 专属代码在 macOS 上不崩溃。
   1. 顶层 `import winreg` → `try/except`
   2. `if __name__` 块内 `import msvcrt` → `try/except + fcntl`
   3. 文件锁 → msvcrt (Windows) / fcntl (Unix) 双平台
-  4. `ctypes.windll.MessageBoxW` → print 到 stderr
 """
-import re
 import sys
 from pathlib import Path
 
@@ -85,14 +83,6 @@ def main() -> int:
         "        sys.exit(0)"
     )
     content, _ = patch(content, old_lock, new_lock, "3 lock")
-
-    # ── Patch 4: 任何残留的 ctypes.windll → 平台判断 ──
-    # 已知位置：完整性校验、调试器检测等弹窗
-    content = re.sub(
-        r"(\s+)ctypes\.windll\.user32\.MessageBoxW\(",
-        r"\1print(\"[MessageBox placeholder]\", file=sys.stderr)\n\1# ",
-        content,
-    )
 
     APP_PY.write_text(content, encoding="utf-8")
     print(f"Wrote patched {APP_PY}")
