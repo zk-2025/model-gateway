@@ -40,100 +40,20 @@ jobs:
           echo "version=$VER" >> $GITHUB_OUTPUT
           echo "Version: $VER"
 
-      # ============================================================
-      # 🔧 临时 patch：仅修改 CI 工作副本，不提交回仓库
-      # ============================================================
-      - name: Patch app.py for macOS compatibility
-        run: |
-          python -c "
-import sys
-
-with open('app.py', 'r', encoding='utf-8') as f:
-    content = f.read()
-
-# -------------------------------------------------------
-# Patch 1: 顶层 import winreg → try/except
-# -------------------------------------------------------
-old = 'import winreg\nimport subprocess'
-new = 'import subprocess\ntry:\n    import winreg\nexcept ImportError:\n    winreg = None  # macOS CI'
-if old in content:
-    content = content.replace(old, new)
-    print('[PATCH 1] import winreg → try/except')
-else:
-    print('[PATCH 1] SKIP (already patched or not found)')
-
-# -------------------------------------------------------
-# Patch 2: if __name__ 块中的 import msvcrt → try/except + fcntl
-# -------------------------------------------------------
-old = '    import msvcrt\n'
-new = '    try:\n        import msvcrt\n    except ImportError:\n        import fcntl\n        msvcrt = None\n'
-if old in content:
-    content = content.replace(old, new)
-    print('[PATCH 2] import msvcrt → try/except + fcntl')
-else:
-    print('[PATCH 2] SKIP')
-
-# -------------------------------------------------------
-# Patch 3: 文件锁 → 跨平台（msvcrt / fcntl）
-# -------------------------------------------------------
-old_lock = '''    LOCK_FILE = str(DATA_DIR / \".gateway.lock\")
-    try:
-        _lock_fd = open(LOCK_FILE, \"w\")
-        msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-    except (OSError, IOError):
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(
-            0, \"网关客户端已在运行中，请勿重复启动。\", \"提示\", 0x30
-        )
-        sys.exit(0)'''
-
-new_lock = '''    LOCK_FILE = str(DATA_DIR / \".gateway.lock\")
-    try:
-        _lock_fd = open(LOCK_FILE, \"w\")
-        if msvcrt is not None:
-            msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, IOError, AttributeError):
-        if msvcrt is not None:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0, \"网关客户端已在运行中，请勿重复启动。\", \"提示\", 0x30
-            )
-        else:
-            print(\"网关客户端已在运行中，请勿重复启动。\", file=sys.stderr)
-        sys.exit(0)'''
-
-if old_lock in content:
-    content = content.replace(old_lock, new_lock)
-    print('[PATCH 3] 文件锁 → 跨平台 (msvcrt/fcntl)')
-else:
-    print('[PATCH 3] SKIP (pattern not found, trying alt...)')
-    # Fallback: try with different indentation
-    for indent in ['    ', '        ', '\t']:
-        test_old = old_lock.replace('    LOCK_FILE', f'{indent}LOCK_FILE').replace('    try:', f'{indent}try:')
-        if test_old in content:
-            test_new = new_lock.replace('    LOCK_FILE', f'{indent}LOCK_FILE').replace('    try:', f'{indent}try:')
-            content = content.replace(test_old, test_new)
-            print(f'[PATCH 3] OK (indent: {repr(indent)})')
-            break
-
-with open('app.py', 'w', encoding='utf-8') as f:
-    f.write(content)
-
-print('✅ macOS patches applied')
-"
+      - name: Patch app.py for macOS
+        run: python scripts/patch_for_macos.py
 
       - name: Verify patches
         run: |
-          echo "=== Checking for remaining Windows-only imports ==="
-          grep -n "import winreg" app.py || echo "  ✓ import winreg now conditional"
-          grep -n "import msvcrt" app.py || echo "  ✓ import msvcrt now conditional"
-          grep -n "ctypes.windll" app.py || echo "  ✓ ctypes.windll now conditional"
+          echo "=== 检查 patch 是否生效 ==="
+          if grep -n "^import winreg" app.py; then
+            echo "ERROR: import winreg 顶层仍未 patch！"; exit 1
+          fi
+          if grep -n "^    import msvcrt" app.py; then
+            echo "ERROR: import msvcrt 仍未 patch！"; exit 1
+          fi
+          echo "Patches OK"
 
-      # ============================================================
-      # 📦 PyInstaller 打包
-      # ============================================================
       - name: Build with PyInstaller
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -146,19 +66,15 @@ print('✅ macOS patches applied')
             --add-data "models_meta.json:." \
             --hidden-import pystray._darwin \
             --hidden-import PIL \
-            --exclude-module MicrosoftEdgeWebview2Setup \
+            --exclude-module winreg \
             app.py
 
       - name: List build output
         run: |
           echo "=== dist/ ==="
-          ls -lh dist/
-          echo "=== build/ ==="
-          ls -lh build/ 2>/dev/null || echo "(no build dir)"
+          ls -lh dist/ 2>/dev/null || (echo "ERROR: no dist/"; exit 1)
+          file dist/*macOS* 2>/dev/null || true
 
-      # ============================================================
-      # 📤 上传产物
-      # ============================================================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -166,10 +82,7 @@ print('✅ macOS patches applied')
           path: dist/v*-网关客户端-macOS
           if-no-files-found: error
 
-      # ============================================================
-      # 🚀 可选：创建 DMG 并发布到 Release
-      # ============================================================
-      - name: Create DMG (optional)
+      - name: Create DMG (only on tag)
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -178,9 +91,10 @@ print('✅ macOS patches applied')
           if [ -f "$APP" ]; then
             mkdir -p dmg_staging
             cp "$APP" dmg_staging/
-            hdiutil create -volname "模型网关" -srcfolder dmg_staging -ov -format UDZO "$DMG_NAME"
+            hdiutil create -volname "ModelGateway" -srcfolder dmg_staging -ov -format UDZO "$DMG_NAME"
             ls -lh "$DMG_NAME"
-            echo "DMG created: $DMG_NAME"
+          else
+            echo "App binary not found, skip DMG"
           fi
 
       - name: Upload DMG to Release
